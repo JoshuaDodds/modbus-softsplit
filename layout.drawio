@@ -1,1 +1,57 @@
-<mxfile host="app.diagrams.net" modified="2022-09-12T20:08:45.443Z" agent="5.0 (Windows)" etag="FKH5cvXNqD2FgMF4i_Fj" version="20.3.0" type="github"><diagram id="eIPMJ2k3sfbq_kxdCN7m" name="Page-1">5VhRc6IwEP41PvaGBEV8VbnezbQ3ndJr7WOUFHITCBeDaH/9LRoERD06UwudvmD2S0KSb7/dLPbMSbi+liQOboVHeQ8b3rpnTnsYoz7C8JMhG43g4XCH+JJ5GisAl71SDRoaTZhHl5WBSgiuWFwFFyKK6EJVMCKlSKvDXgSvrhoTn9YAd0F4HX1ingo0iqxR0fGDMj/QS9tYny8k+WB9kmVAPJGWINPpmRMphNq1wvWE8oy9nJfdvO8nevcbkzRSTSaMifylbiyVun/vU+k7s9exuNKbXRGe6AP3sMXhfWOPraDpZ837h985Cq8vdeiDqU3OFvWAPG0KqQLhi4hwp0DHUiSRR7MtGWAVY26EiAFEAP6hSm20EkiiBECBCrnu3a2ZLXSSBw0tRSIX9Mzhcz0R6VN1Zpy19xbonIqQKrmBeZJyotiqug+i9ebvxxUugYb2yhs8hJp4yOUE9oEN1NBPVS+kAVPUjcmWrBQC+RjjKyoVXZ/nvM6RnjAY6SDI00Bf22k5pjQWlMIpH/futJpfWfi4ofBPOPVjhI/fInzcUeHbqGvCt5rQ6jwhOJex1T/ct/B4mNzB06US6Ogo132ja1zni5XI3vL4qZOH/RluTbtRer/7mYk8iSIW+dCC8nWeLK9c8aKWMWfqlM5rL8qhuTxEvvLUttPBQc2xL8RL6QBbg3o6QObF8kG96mgpHwCHcjPT87fGc2Z8G+TmdF3unG609Y55BDUtv5HdZiZB9QJ8QuU8uxOvZzXX/UfWVb+9g8hNfCDyXNDlOw8fufOsi2m8UYHRqcp6HwyovWDoNw2GUavB0K8595asaQiQ8wiPSZDtP2sIYEpwnhWLLYeIbXQuROrVySOTKiHZzNKnfNsf7Ye5xa5foMMjvF3u+hw14A23zps1+DDewCz+QNz2lf6HNZ1/</diagram></mxfile>
+<mxfile host="app.diagrams.net" modified="2022-09-13T08:08:15.009Z" agent="5.0 (Windows)" etag="Mc26dg4KXmaDuAe_t8SD" version="20.3.0" type="github">
+  <diagram id="eIPMJ2k3sfbq_kxdCN7m" name="Page-1">
+    <mxGraphModel dx="1412" dy="1277" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="BarNtL6twSqRwrgEXzBo-7" value="&lt;div&gt;RTU&lt;/div&gt;" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="BarNtL6twSqRwrgEXzBo-1" target="BarNtL6twSqRwrgEXzBo-6" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="BarNtL6twSqRwrgEXzBo-1" value="&lt;div&gt;Slave 1&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="567.5" y="140" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="BarNtL6twSqRwrgEXzBo-3" value="&lt;div&gt;RTU&lt;/div&gt;" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="BarNtL6twSqRwrgEXzBo-2" target="BarNtL6twSqRwrgEXzBo-1" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="BarNtL6twSqRwrgEXzBo-2" value="&lt;div&gt;Slave 2&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="810" y="140" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="04yqYJvkZFRbiZLDvD1z-1" value="&lt;div&gt;TCP&lt;/div&gt;" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.532;entryY=-0.006;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1" source="BarNtL6twSqRwrgEXzBo-6" target="BarNtL6twSqRwrgEXzBo-8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="BarNtL6twSqRwrgEXzBo-6" value="&lt;div&gt;EW11 RTU to TCP Server&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="325" y="140" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="BarNtL6twSqRwrgEXzBo-8" value="&lt;div&gt;(Master 1)&lt;/div&gt;&lt;div&gt;RPI Running Modbus-Softsplit&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="490" y="220" width="265" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="BarNtL6twSqRwrgEXzBo-13" value="TCP" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="BarNtL6twSqRwrgEXzBo-11" target="BarNtL6twSqRwrgEXzBo-18" edge="1">
+          <mxGeometry x="-0.5" y="5" relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="460" y="315" />
+              <mxPoint x="460" y="315" />
+            </Array>
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="BarNtL6twSqRwrgEXzBo-11" value="(Master 2)&lt;br&gt;Cerbo GX" style="whiteSpace=wrap;html=1;rounded=0;" parent="1" vertex="1">
+          <mxGeometry x="320" y="285" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="BarNtL6twSqRwrgEXzBo-16" value="&lt;div&gt;RTU&lt;/div&gt;" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="BarNtL6twSqRwrgEXzBo-14" target="BarNtL6twSqRwrgEXzBo-19" edge="1">
+          <mxGeometry x="-0.5" y="-5" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="BarNtL6twSqRwrgEXzBo-14" value="(Master 3)&lt;br&gt;Maxem EV Charge Controller" style="whiteSpace=wrap;html=1;rounded=0;" parent="1" vertex="1">
+          <mxGeometry x="800" y="267.5" width="120" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="BarNtL6twSqRwrgEXzBo-18" value="(Virtual Bus 1)&lt;br&gt;Slaves 1 &amp;amp; 2 replicated" style="rounded=0;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="520" y="280" width="80" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="BarNtL6twSqRwrgEXzBo-19" value="&lt;div&gt;(Virtual Bus 2)&lt;/div&gt;&lt;div&gt;Slaves 1 &amp;amp; 2 replicated&lt;br&gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="640" y="280" width="80" height="70" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
