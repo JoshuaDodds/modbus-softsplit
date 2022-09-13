@@ -1,0 +1,13 @@
+#!/bin/sh -e
+#
+# rc.local
+#
+# This script is executed at the end of each multiuser runlevel.
+# Make sure that the script will "exit 0" on success or any other
+# value on error.
+#
+modprobe -r usbserial
+modprobe usbserial
+insmod /usr/local/src/xr_usb_serial_common-1c/xr_usb_serial_common.ko
+
+exit 0

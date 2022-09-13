@@ -1,0 +1,11 @@
+[Unit]
+Description=Modbus Multi-Master/Slave Proxy
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/app/modbus-softsplit/main.py
+Restart=on-abort
+
+[Install]
+WantedBy=multi-user.target
