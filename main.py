@@ -24,7 +24,7 @@ def main():
     victron_2 = None
 
     try:
-        tcp_slave_server = modbus_tcp.TcpServer(address="192.168.1.87", port=502)
+        tcp_slave_server = modbus_tcp.TcpServer(port=502)
         rtu_slave_server = modbus_rtu.RtuServer(serial.Serial(port=SERIAL_PORT, baudrate=19200, bytesize=8, parity=serial.PARITY_EVEN, stopbits=serial.STOPBITS_ONE, xonxoff=0, timeout=10))
 
         maxem_100 = rtu_slave_server.add_slave(100)
