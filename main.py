@@ -3,8 +3,8 @@ import time
 import serial
 import logging as logger
 
-import modbus_tk.defines as cst
-from modbus_tk import modbus_tcp, modbus_rtu
+import modbus_toolkit.defines as cst
+from modbus_toolkit import modbus_tcp, modbus_rtu
 
 SERIAL_PORT = "/dev/ttyXRUSB0"
 MODBUS_TCP_GW = "192.168.1.140"
