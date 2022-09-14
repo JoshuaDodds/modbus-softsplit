@@ -2,18 +2,20 @@
 import time
 import serial
 import logging as logger
+from dotenv import dotenv_values
 
 import modbus_toolkit.defines as cst
 from modbus_toolkit import modbus_tcp, modbus_rtu
 
-SERIAL_PORT = "/dev/ttyXRUSB0"
-MODBUS_TCP_GW = "192.168.1.140"
-MODBUS_TCP_GW_PORT = 8899
+SERIAL_PORT = dotenv_values('.env')['SERIAL_PORT'] or "/dev/ttyXRUSB0"
+MODBUS_TCP_GW = dotenv_values('.env')['MODBUS_TCP_GW_IP'] or "192.168.1.140"
+MODBUS_TCP_GW_PORT = int(dotenv_values('.env')['MODBUS_TCP_GW_PORT']) or 8899
 
 logger.basicConfig(
     format='%(asctime)s modbus-gw: %(message)s',
     level=logger.INFO,
     datefmt='%Y-%m-%d %H:%M:%S')
+
 
 def main():
     tcp_slave_server = None
