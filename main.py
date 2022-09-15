@@ -77,6 +77,8 @@ def main():
                 if tesla_values:
                     if tcp_slave_server and victron_2:
                         victron_2.set_values(register_name, addr, tesla_values)
+            logger.info(f"TCP slave data updated.")
+
             # Maxem
             for register_name in MAXEM_HOLDING_REGISTERS:
                 addr = MAXEM_HOLDING_REGISTERS[register_name][0]
@@ -91,7 +93,8 @@ def main():
                     if rtu_slave_server and maxem_2:
                         maxem_2.set_values(register_name, addr, tesla_values)
 
-            time.sleep(0.5)
+            logger.info(f"RTU slave data updated.")
+            time.sleep(1.0)
 
         except Exception as _E:
             logger.error(f"tcp_master(error): {_E}")
