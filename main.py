@@ -4,8 +4,8 @@ import serial
 import logging as logger
 from dotenv import dotenv_values
 
-import modbus_toolkit.defines as cst
-from modbus_toolkit import modbus_tcp, modbus_rtu
+import modbus_tk.defines as cst
+from modbus_tk import modbus_tcp, modbus_rtu
 
 SERIAL_PORT = dotenv_values('.env')['SERIAL_PORT'] or "/dev/ttyXRUSB0"
 MODBUS_TCP_GW = dotenv_values('.env')['MODBUS_TCP_GW_IP'] or "192.168.1.140"
@@ -27,7 +27,7 @@ def main():
 
     try:
         tcp_slave_server = modbus_tcp.TcpServer(port=502)
-        rtu_slave_server = modbus_rtu.RtuServer(serial.Serial(port=SERIAL_PORT, baudrate=19200, bytesize=8, parity=serial.PARITY_EVEN, stopbits=serial.STOPBITS_ONE, xonxoff=0, timeout=10))
+        rtu_slave_server = modbus_rtu.RtuServer(serial.Serial(port=SERIAL_PORT, baudrate=19200, bytesize=8, parity=serial.PARITY_EVEN, stopbits=serial.STOPBITS_ONE, xonxoff=0, timeout=1))
 
         maxem_100 = rtu_slave_server.add_slave(100)
         maxem_2 = rtu_slave_server.add_slave(2)
