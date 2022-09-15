@@ -43,6 +43,7 @@ RPi hardware.
 
 #### Exar Notes:
 - use the included driver which will build on linux kernels 5.15 and newer
+- look at the rc.local file in the ```etc``` directory for tips how to load and start the driver 
 
 #### Waveshare CAN Hat notes:
 - The serial port of RPi hardware is used by default but the console.  We need to disable this using the 
