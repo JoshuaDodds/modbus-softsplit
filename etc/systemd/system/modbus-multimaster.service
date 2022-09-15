@@ -4,7 +4,7 @@ After=multi-user.target
 
 [Service]
 Type=simple
-ExecStart=/app/modbus-softsplit/main.py
+ExecStart=/bin/bash -c "cd /app/modbus-softsplit/ && python -u main.py"
 Restart=on-abort
 
 [Install]
