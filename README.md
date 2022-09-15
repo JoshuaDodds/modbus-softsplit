@@ -37,7 +37,28 @@ virtual client devices via modbus-rtu using the USB to RS-485 converter.
 or all Server devices support modbus-tcp.  The easy to use modbus-tk project makes it quite easy to quickly adjust to 
 your specific situation. 
 
-## Requirements
+## Tested Hardware
+This has been tested with the Exar USB to RS-485 adapter and with the Waveshare CAN Hat (CANbus and RS-485 add-on) for
+RPi hardware.
+
+#### Exar Notes:
+- use the included driver which will build on linux kernels 5.15 and newer
+
+#### Waveshare CAN Hat notes:
+- The serial port of RPi hardware is used by default but the console.  We need to disable this using the 
+```raspi-config``` tool.  Turn off the console but turn on the port itself.  
+- Then, add the following to /boot/config.txt after fitting the unit to your board. 
+
+ ```
+ # Enable waveshare can hat -jd
+dtoverlay=mcp2515-can0,oscillator=12000000,interrupt=25,spimaxfrequency=2000000
+enable_uart=1
+dtoverlay=pi3-miniuart-bt
+```
+This enables the canbus interface, UART, and allows use of /dev/ttyAMA0 as an RS-485 serial port.  
+Finally, reboot the RPi. 
+
+## Acknowledgements
 This project, with gratitude, depends on and appreciates the following third party projects
 - Modbus-TK (https://github.com/ljean/modbus-tk)
 - pyserial (for RTU/serial communication) (https://github.com/pyserial/pyserial)

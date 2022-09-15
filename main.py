@@ -1,19 +1,20 @@
 #!/usr/bin/python3 -u
-import time
 import serial
 import logging as logger
+from dotenv import dotenv_values
 
 import modbus_tk.defines as cst
 from modbus_tk import modbus_tcp, modbus_rtu
 
-SERIAL_PORT = "/dev/ttyXRUSB0"
-MODBUS_TCP_GW = "192.168.1.140"
-MODBUS_TCP_GW_PORT = 8899
+SERIAL_PORT = dotenv_values('.env')['SERIAL_PORT'] or "/dev/ttyXRUSB0"
+MODBUS_TCP_GW = dotenv_values('.env')['MODBUS_TCP_GW_IP'] or "192.168.1.140"
+MODBUS_TCP_GW_PORT = int(dotenv_values('.env')['MODBUS_TCP_GW_PORT']) or 8899
 
 logger.basicConfig(
     format='%(asctime)s modbus-gw: %(message)s',
     level=logger.INFO,
     datefmt='%Y-%m-%d %H:%M:%S')
+
 
 def main():
     tcp_slave_server = None
@@ -24,8 +25,8 @@ def main():
     victron_2 = None
 
     try:
-        tcp_slave_server = modbus_tcp.TcpServer(address="192.168.1.87", port=502)
-        rtu_slave_server = modbus_rtu.RtuServer(serial.Serial(port=SERIAL_PORT, baudrate=19200, bytesize=8, parity=serial.PARITY_EVEN, stopbits=serial.STOPBITS_ONE, xonxoff=0, timeout=10))
+        tcp_slave_server = modbus_tcp.TcpServer(port=502)
+        rtu_slave_server = modbus_rtu.RtuServer(serial.Serial(port=SERIAL_PORT, baudrate=19200, bytesize=8, parity=serial.PARITY_EVEN, stopbits=serial.STOPBITS_ONE, xonxoff=0, timeout=1))
 
         maxem_100 = rtu_slave_server.add_slave(100)
         maxem_2 = rtu_slave_server.add_slave(2)
@@ -75,6 +76,8 @@ def main():
                 if tesla_values:
                     if tcp_slave_server and victron_2:
                         victron_2.set_values(register_name, addr, tesla_values)
+            logger.info(f"TCP slave data updated.")
+
             # Maxem
             for register_name in MAXEM_HOLDING_REGISTERS:
                 addr = MAXEM_HOLDING_REGISTERS[register_name][0]
@@ -89,7 +92,7 @@ def main():
                     if rtu_slave_server and maxem_2:
                         maxem_2.set_values(register_name, addr, tesla_values)
 
-            time.sleep(0.5)
+            logger.info(f"RTU slave data updated.")
 
         except Exception as _E:
             logger.error(f"tcp_master(error): {_E}")
