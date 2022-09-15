@@ -1,5 +1,4 @@
 #!/usr/bin/python3 -u
-import time
 import serial
 import logging as logger
 from dotenv import dotenv_values
@@ -94,7 +93,6 @@ def main():
                         maxem_2.set_values(register_name, addr, tesla_values)
 
             logger.info(f"RTU slave data updated.")
-            time.sleep(1.0)
 
         except Exception as _E:
             logger.error(f"tcp_master(error): {_E}")
