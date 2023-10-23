@@ -46,7 +46,7 @@ RPi hardware.
 - look at the rc.local file in the ```etc``` directory for tips how to load and start the driver 
 
 #### Waveshare CAN Hat notes:
-- The serial port of RPi hardware is used by default but the console.  We need to disable this using the 
+- The serial port of RPi hardware is used by default by the console.  We need to disable this using the 
 ```raspi-config``` tool.  Turn off the console but turn on the port itself.  
 - Then, add the following to /boot/config.txt after fitting the unit to your board. 
 
