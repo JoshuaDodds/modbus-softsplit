@@ -4,6 +4,7 @@ KERNELDIR ?= /lib/modules/$(shell uname -r)/build
 PWD       := $(shell pwd)
 
 # EXTRA_CFLAGS	:= -DDEBUG=0
+EXTRA_CFLAGS += -Wno-error=incompatible-pointer-types
 
 all:
 	$(MAKE) -C $(KERNELDIR) M=$(PWD)
