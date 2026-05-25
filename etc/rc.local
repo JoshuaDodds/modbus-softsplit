@@ -7,7 +7,10 @@
 # value on error.
 #
 modprobe -r usbserial
+modprobe -r xr_serial
 modprobe usbserial
-insmod /usr/local/src/xr_usb_serial_common-1c/xr_usb_serial_common.ko
+insmod /app/modbus-softsplit/driver/Exar/xr_usb_serial_common.ko
 
 exit 0
+
+

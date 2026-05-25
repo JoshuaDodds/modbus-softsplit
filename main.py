@@ -1,4 +1,5 @@
 #!/usr/bin/python3 -u
+import time
 import serial
 import logging as logger
 from dotenv import dotenv_values
@@ -6,14 +7,42 @@ from dotenv import dotenv_values
 import modbus_tk.defines as cst
 from modbus_tk import modbus_tcp, modbus_rtu
 
-SERIAL_PORT = dotenv_values('.env')['SERIAL_PORT'] or "/dev/ttyXRUSB0"
-MODBUS_TCP_GW = dotenv_values('.env')['MODBUS_TCP_GW_IP'] or "192.168.1.140"
-MODBUS_TCP_GW_PORT = int(dotenv_values('.env')['MODBUS_TCP_GW_PORT']) or 8899
+SERIAL_PORT = dotenv_values('.env').get('SERIAL_PORT') or "/dev/ttyXRUSB0"
+MODBUS_TCP_GW = dotenv_values('.env').get('MODBUS_TCP_GW_IP') or "192.168.1.140"
+MODBUS_TCP_GW_PORT = int(dotenv_values('.env').get('MODBUS_TCP_GW_PORT') or 8899)
 
 logger.basicConfig(
     format='%(asctime)s modbus-gw: %(message)s',
     level=logger.INFO,
     datefmt='%Y-%m-%d %H:%M:%S')
+
+# Enable debug logging ONLY for the modbus_tk internal engine to expose the TCP requests
+modbus_tk_logger = logger.getLogger("modbus_tk")
+modbus_tk_logger.setLevel(logger.DEBUG)
+
+
+class SerialSniffer:
+    def __init__(self, port):
+        self._port = port
+
+    def __getattr__(self, attr):
+        return getattr(self._port, attr)
+
+    def read(self, size=1):
+        data = self._port.read(size)
+        
+        # Filter isolated bus-release noise (common on 2-wire RS485)
+        if len(data) == 1 and data in (b'\x00', b'\xff'):
+            return b''
+            
+        # These are tied to the root logger (INFO), so they remain silent
+        if data:
+            logger.debug(f"RTU RAW RX: {data.hex()}")
+        return data
+
+    def write(self, data):
+        logger.debug(f"RTU RAW TX: {data.hex()}")
+        return self._port.write(data)
 
 
 def main():
@@ -26,22 +55,32 @@ def main():
 
     try:
         tcp_slave_server = modbus_tcp.TcpServer(port=502)
-        rtu_slave_server = modbus_rtu.RtuServer(serial.Serial(port=SERIAL_PORT, baudrate=19200, bytesize=8, parity=serial.PARITY_EVEN, stopbits=serial.STOPBITS_ONE, xonxoff=0, timeout=1))
+        
+        raw_serial = serial.Serial(
+            port=SERIAL_PORT, 
+            baudrate=19200, 
+            bytesize=8, 
+            parity=serial.PARITY_EVEN, 
+            stopbits=serial.STOPBITS_ONE, 
+            xonxoff=0, 
+            timeout=0.1, 
+            inter_byte_timeout=0.01 
+        )
+        
+        sniffed_serial = SerialSniffer(raw_serial)
+        rtu_slave_server = modbus_rtu.RtuServer(sniffed_serial)
 
         maxem_100 = rtu_slave_server.add_slave(100)
         maxem_2 = rtu_slave_server.add_slave(2)
         victron_100 = tcp_slave_server.add_slave(100)
         victron_2 = tcp_slave_server.add_slave(2)
 
-        # Create registers for virtual slave devices
-        # Victron Energy compatible memory blocks
         for register_name in VICTRON_HOLDING_REGISTERS:
             addr = VICTRON_HOLDING_REGISTERS[register_name][0]
             addr_len = VICTRON_HOLDING_REGISTERS[register_name][1]
             victron_100.add_block(register_name, cst.HOLDING_REGISTERS, addr, addr_len)
             victron_2.add_block(register_name, cst.HOLDING_REGISTERS, addr, addr_len)
 
-        # Maxem Home compatible memory blocks
         for register_name in MAXEM_HOLDING_REGISTERS:
             addr = MAXEM_HOLDING_REGISTERS[register_name][0]
             addr_len = MAXEM_HOLDING_REGISTERS[register_name][1]
@@ -54,16 +93,15 @@ def main():
         logger.info(f"Modbus RTU slave server started...")
 
     except KeyboardInterrupt as _E:
-        tcp_slave_server.stop()
-        rtu_slave_server.stop()
+        if tcp_slave_server: tcp_slave_server.stop()
+        if rtu_slave_server: rtu_slave_server.stop()
 
     tcp_master = modbus_tcp.TcpMaster(host=MODBUS_TCP_GW, port=MODBUS_TCP_GW_PORT, timeout_in_sec=5.0)
 
+    last_heartbeat = time.time()
+
     while True:
         try:
-            # Poll the real ABB B23 hardware slaves via network connected Modbus-TCP server (waveshare / EW-11 / etc.)
-            # and copy that data to the 'virtual' slaves.
-            # Victron
             for register_name in VICTRON_HOLDING_REGISTERS:
                 addr = VICTRON_HOLDING_REGISTERS[register_name][0]
                 addr_len = VICTRON_HOLDING_REGISTERS[register_name][1]
@@ -76,9 +114,7 @@ def main():
                 if tesla_values:
                     if tcp_slave_server and victron_2:
                         victron_2.set_values(register_name, addr, tesla_values)
-            logger.info(f"TCP slave data updated.")
 
-            # Maxem
             for register_name in MAXEM_HOLDING_REGISTERS:
                 addr = MAXEM_HOLDING_REGISTERS[register_name][0]
                 addr_len = MAXEM_HOLDING_REGISTERS[register_name][1]
@@ -92,11 +128,20 @@ def main():
                     if rtu_slave_server and maxem_2:
                         maxem_2.set_values(register_name, addr, tesla_values)
 
-            logger.info(f"RTU slave data updated.")
+            current_time = time.time()
+            if current_time - last_heartbeat >= 60:
+                logger.info(f"Heartbeat: Successfully polled master and updated virtual slaves.")
+                last_heartbeat = current_time
+
+            time.sleep(1)
 
         except Exception as _E:
             logger.error(f"tcp_master(error): {_E}")
-            tcp_master.close()
+            try:
+                tcp_master.close()
+            except Exception:
+                pass
+            time.sleep(5)
 
 
 MAXEM_HOLDING_REGISTERS = dict({
@@ -122,3 +167,4 @@ VICTRON_HOLDING_REGISTERS = dict({
 
 if __name__ == "__main__":
     main()
+
