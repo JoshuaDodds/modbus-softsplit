@@ -6,8 +6,8 @@
 # Make sure that the script will "exit 0" on success or any other
 # value on error.
 #
-modprobe -r usbserial
 modprobe -r xr_serial
+modprobe -r usbserial
 modprobe usbserial
 insmod /app/modbus-softsplit/driver/Exar/xr_usb_serial_common.ko
 
