@@ -1,3 +1,5 @@
+.secrets-agents
+mcp.json
 *.mod
 
 # Byte-compiled / optimized / DLL files
