@@ -34,8 +34,44 @@ Energy hardware while the other exposes itself via modbus-rtu by way of a USB to
 mentioned earlier does not support modbus-tcp so it was necessary to wire it directly and provide access to the 
 virtual client devices via modbus-rtu using the USB to RS-485 converter.  
 - This code should be easily read and converted in the situation where you want to have multiple RTU based Server devices
-or all Server devices support modbus-tcp.  The easy to use modbus-tk project makes it quite easy to quickly adjust to 
+or all Server devices support modbus-tcp.  The easy to use modbus-tk project makes it quite easy to quickly adjust to
 your specific situation. 
+- The Maxem Home rewrite path is opt-in via `--dry-run-maxem-home`. When that flag is set, the service leaves the RTU
+  serial adapter unopened and logs the instantaneous-power rewrite it would apply to `instantaneous_values` instead of
+  writing values into the RTU slave. This keeps the RTU serving path quiet while we inspect the intended rewrite
+  behavior.
+- In dry-run mode the Maxem preview is intentionally short and easy to compare against dashboards:
+  `ABB source: X W` followed by `DZ Usage to Maxem: Y W`.
+- The corrected v1 story is to source Domoticz IDX 20 `Usage` as the live grid-import watt reading, clamp any negative
+  net value to zero, and encode the result into the ABB-compatible instantaneous active-power register at
+  `0x5B14/0x5B15`. House load is not forwarded to Maxem. The earlier cumulative-counter preview was a prototype
+  interpretation and is deprecated.
+- The dry-run logger prints one semantic line before the two preview values so it is obvious that the preview is the
+  ABB instantaneous power register being rewritten from Domoticz `Usage`.
+- Register bundle captures and replay previews live under `tools/`. The dump helper defaults to `instantaneous_values`
+  only, and the replay helper prints the same watt-based preview lines without touching the RTU adapter.
+- Preview semantics are simple:
+  - `ABB source` is the decoded instantaneous active-power total from ABB.
+  - `DZ Usage to Maxem` is the Domoticz IDX 20 grid-import watt reading after clamping negatives to zero and encoding
+    it back into the ABB register format.
+- Core application modules now live under `lib/` so the repo root stays focused on the entrypoint, tools,
+  and docs.
+
+## Development workflow
+
+- Test files use numbered prefixes like `tests/10_test_maxem_home_usage.py` and `tests/20_test_dump_and_replay.py` so
+  related suites can grow in a predictable order.
+- `pytest.ini` is configured to collect only numbered test files from `tests/`.
+- The quickest local checks are `python3 -m pytest` and `python3 -m py_compile` on the touched modules.
+- For the register tooling, run `python3 tools/dump_register_block.py --help` and
+  `python3 tools/replay_maxem_preview.py --help` before using real captures.
+- `python3 tools/dump_register_block.py` defaults to the ABB `instantaneous_values` block; pass `--register` to add
+  extra blocks only when you truly need them.
+- `python3 tools/replay_maxem_preview.py --bundle <file>` prints the same `ABB source` and `DZ Usage to Maxem` watt
+  lines that the dry-run runtime uses.
+- The main loop now handles `Ctrl-C` cleanly in one interrupt and stops the poller and servers without a traceback.
+- Canonical project-specific runtime rules and durable decisions live in
+  `docs/decisions/project-conventions.md`.
 
 ## Tested Hardware
 This has been tested with the Exar USB to RS-485 adapter and with the Waveshare CAN Hat (CANbus and RS-485 add-on) for

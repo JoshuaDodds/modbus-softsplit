@@ -1,14 +1,64 @@
 #!/usr/bin/python3 -u
-import serial
+import argparse
 import logging as logger
+import os
+
 from dotenv import dotenv_values
 
 import modbus_tk.defines as cst
-from modbus_tk import modbus_tcp, modbus_rtu
+from modbus_tk import modbus_rtu, modbus_tcp
 
-SERIAL_PORT = dotenv_values('.env')['SERIAL_PORT'] or "/dev/ttyXRUSB0"
-MODBUS_TCP_GW = dotenv_values('.env')['MODBUS_TCP_GW_IP'] or "192.168.1.140"
-MODBUS_TCP_GW_PORT = int(dotenv_values('.env')['MODBUS_TCP_GW_PORT']) or 8899
+import serial
+
+from lib.register_maps import MAXEM_HOLDING_REGISTERS, VICTRON_HOLDING_REGISTERS
+from lib.maxem_home_usage import (
+    DomoticzUsageCache,
+    DomoticzUsagePoller,
+    INSTANTANEOUS_VALUES_REGISTER_NAME,
+    describe_instantaneous_preview_basis,
+    format_instantaneous_preview_lines,
+    preview_signature,
+    rewrite_instantaneous_values,
+)
+from lib.synthetic_home import DomoticzClient, RegisterCapture
+
+_DOTENV = dotenv_values(".env")
+
+
+def _get_setting(name, default=None):
+    value = os.environ.get(name)
+    if value not in (None, ""):
+        return value
+
+    value = _DOTENV.get(name)
+    if value in (None, ""):
+        return default
+
+    return value
+
+
+def _parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Modbus softsplit proxy")
+    parser.add_argument(
+        "--dry-run-maxem-home",
+        action="store_true",
+        help=(
+            "Skip the RTU serial adapter and log the ABB instantaneous-power rewrite plan instead of writing "
+            "to the RTU slave."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
+SERIAL_PORT = _get_setting("SERIAL_PORT", "/dev/ttyXRUSB0")
+MODBUS_TCP_GW = _get_setting("MODBUS_TCP_GW_IP", "192.168.1.140")
+MODBUS_TCP_GW_PORT = int(_get_setting("MODBUS_TCP_GW_PORT", "8899"))
+DOMOTICZ_URL = _get_setting("DOMOTICZ_URL", "http://dz-insecure.hs.mfis.net")
+DOMOTICZ_GRID_IDX = int(_get_setting("DOMOTICZ_GRID_IDX", "20"))
+DOMOTICZ_TIMEOUT_SECONDS = float(_get_setting("DOMOTICZ_TIMEOUT_SECONDS", "1.0"))
+DOMOTICZ_USAGE_POLL_INTERVAL_SECONDS = float(
+    _get_setting("DOMOTICZ_USAGE_POLL_INTERVAL_SECONDS", "5.0")
+)
 
 logger.basicConfig(
     format='%(asctime)s modbus-gw: %(message)s',
@@ -16,20 +66,42 @@ logger.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S')
 
 
+def _stop_runtime(
+    tcp_master,
+    tcp_slave_server,
+    rtu_slave_server,
+    usage_poller,
+):
+    if usage_poller:
+        usage_poller.stop()
+        usage_poller.join(timeout=2.0)
+
+    if rtu_slave_server:
+        rtu_slave_server.stop()
+
+    if tcp_slave_server:
+        tcp_slave_server.stop()
+
+    if tcp_master:
+        tcp_master.close()
+
+
 def main():
+    args = _parse_args()
+    dry_run_maxem_home = args.dry_run_maxem_home
     tcp_slave_server = None
     rtu_slave_server = None
     maxem_100 = None
     maxem_2 = None
     victron_100 = None
     victron_2 = None
+    usage_cache = None
+    usage_poller = None
+    tcp_master = None
 
     try:
         tcp_slave_server = modbus_tcp.TcpServer(port=502)
-        rtu_slave_server = modbus_rtu.RtuServer(serial.Serial(port=SERIAL_PORT, baudrate=19200, bytesize=8, parity=serial.PARITY_EVEN, stopbits=serial.STOPBITS_ONE, xonxoff=0, timeout=1))
 
-        maxem_100 = rtu_slave_server.add_slave(100)
-        maxem_2 = rtu_slave_server.add_slave(2)
         victron_100 = tcp_slave_server.add_slave(100)
         victron_2 = tcp_slave_server.add_slave(2)
 
@@ -41,84 +113,139 @@ def main():
             victron_100.add_block(register_name, cst.HOLDING_REGISTERS, addr, addr_len)
             victron_2.add_block(register_name, cst.HOLDING_REGISTERS, addr, addr_len)
 
-        # Maxem Home compatible memory blocks
-        for register_name in MAXEM_HOLDING_REGISTERS:
-            addr = MAXEM_HOLDING_REGISTERS[register_name][0]
-            addr_len = MAXEM_HOLDING_REGISTERS[register_name][1]
-            maxem_100.add_block(register_name, cst.HOLDING_REGISTERS, addr, addr_len)
-            maxem_2.add_block(register_name, cst.HOLDING_REGISTERS, addr, addr_len)
-
         tcp_slave_server.start()
         logger.info(f"Modbus TCP slave server started...")
-        rtu_slave_server.start()
-        logger.info(f"Modbus RTU slave server started...")
 
-    except KeyboardInterrupt as _E:
-        tcp_slave_server.stop()
-        rtu_slave_server.stop()
+        domoticz_client = DomoticzClient(
+            DOMOTICZ_URL,
+            DOMOTICZ_GRID_IDX,
+            timeout_seconds=DOMOTICZ_TIMEOUT_SECONDS,
+        )
+        usage_cache = DomoticzUsageCache()
+        usage_poller = DomoticzUsagePoller(
+            domoticz_client,
+            usage_cache,
+            poll_interval_seconds=DOMOTICZ_USAGE_POLL_INTERVAL_SECONDS,
+            logger=logger,
+        )
+        usage_poller.start()
 
-    tcp_master = modbus_tcp.TcpMaster(host=MODBUS_TCP_GW, port=MODBUS_TCP_GW_PORT, timeout_in_sec=5.0)
+        if dry_run_maxem_home:
+            logger.info(
+                "Maxem Home dry-run preview enabled; the RTU serial adapter will not be opened and Maxem writes will be logged only."
+            )
+            logger.info(describe_instantaneous_preview_basis())
+        else:
+            rtu_slave_server = modbus_rtu.RtuServer(
+                serial.Serial(
+                    port=SERIAL_PORT,
+                    baudrate=19200,
+                    bytesize=8,
+                    parity=serial.PARITY_EVEN,
+                    stopbits=serial.STOPBITS_ONE,
+                    xonxoff=0,
+                    timeout=1,
+                )
+            )
+            maxem_100 = rtu_slave_server.add_slave(100)
+            maxem_2 = rtu_slave_server.add_slave(2)
 
-    while True:
-        try:
-            # Poll the real ABB B23 hardware slaves via network connected Modbus-TCP server (waveshare / EW-11 / etc.)
-            # and copy that data to the 'virtual' slaves.
-            # Victron
-            for register_name in VICTRON_HOLDING_REGISTERS:
-                addr = VICTRON_HOLDING_REGISTERS[register_name][0]
-                addr_len = VICTRON_HOLDING_REGISTERS[register_name][1]
-
-                acload_values = tcp_master.execute(100, cst.READ_HOLDING_REGISTERS, addr, addr_len)
-                if acload_values:
-                    if tcp_slave_server and victron_100:
-                        victron_100.set_values(register_name, addr, acload_values)
-                tesla_values = tcp_master.execute(2, cst.READ_HOLDING_REGISTERS, addr, addr_len)
-                if tesla_values:
-                    if tcp_slave_server and victron_2:
-                        victron_2.set_values(register_name, addr, tesla_values)
-            logger.info(f"TCP slave data updated.")
-
-            # Maxem
+            # Maxem Home compatible memory blocks
             for register_name in MAXEM_HOLDING_REGISTERS:
                 addr = MAXEM_HOLDING_REGISTERS[register_name][0]
                 addr_len = MAXEM_HOLDING_REGISTERS[register_name][1]
+                maxem_100.add_block(register_name, cst.HOLDING_REGISTERS, addr, addr_len)
+                maxem_2.add_block(register_name, cst.HOLDING_REGISTERS, addr, addr_len)
 
-                acload_values = tcp_master.execute(100, cst.READ_HOLDING_REGISTERS, addr, addr_len)
-                if acload_values:
-                    if rtu_slave_server and maxem_100:
-                        maxem_100.set_values(register_name, addr, acload_values)
-                tesla_values = tcp_master.execute(2, cst.READ_HOLDING_REGISTERS, addr, addr_len)
-                if tesla_values:
-                    if rtu_slave_server and maxem_2:
+            rtu_slave_server.start()
+            logger.info(f"Modbus RTU slave server started...")
+
+        tcp_master = modbus_tcp.TcpMaster(host=MODBUS_TCP_GW, port=MODBUS_TCP_GW_PORT, timeout_in_sec=5.0)
+        last_preview_signatures = {}
+
+        while True:
+            try:
+                # Poll the real ABB B23 hardware slaves via network connected Modbus-TCP server (waveshare / EW-11 / etc.)
+                # and copy that data to the 'virtual' slaves.
+                # Victron
+                for register_name in VICTRON_HOLDING_REGISTERS:
+                    addr = VICTRON_HOLDING_REGISTERS[register_name][0]
+                    addr_len = VICTRON_HOLDING_REGISTERS[register_name][1]
+
+                    acload_values = tcp_master.execute(100, cst.READ_HOLDING_REGISTERS, addr, addr_len)
+                    if acload_values:
+                        if tcp_slave_server and victron_100:
+                            victron_100.set_values(register_name, addr, acload_values)
+                    tesla_values = tcp_master.execute(2, cst.READ_HOLDING_REGISTERS, addr, addr_len)
+                    if tesla_values:
+                        if tcp_slave_server and victron_2:
+                            victron_2.set_values(register_name, addr, tesla_values)
+                if not dry_run_maxem_home:
+                    logger.info(f"TCP slave data updated.")
+
+                # Maxem
+                for register_name in MAXEM_HOLDING_REGISTERS:
+                    addr = MAXEM_HOLDING_REGISTERS[register_name][0]
+                    addr_len = MAXEM_HOLDING_REGISTERS[register_name][1]
+
+                    if dry_run_maxem_home and register_name != INSTANTANEOUS_VALUES_REGISTER_NAME:
+                        continue
+
+                    acload_values = tcp_master.execute(100, cst.READ_HOLDING_REGISTERS, addr, addr_len)
+                    if acload_values:
+                        capture = RegisterCapture(
+                            target_slave=100,
+                            source_slave=100,
+                            register_name=register_name,
+                            address=addr,
+                            address_length=addr_len,
+                            source_values=tuple(int(value) for value in acload_values),
+                        )
+                        if dry_run_maxem_home:
+                            preview_snapshot = usage_cache.snapshot() if usage_cache is not None else None
+                            preview_signature_value = preview_signature(
+                                capture,
+                                snapshot=preview_snapshot,
+                            )
+                            if preview_signature_value != last_preview_signatures.get((capture.target_slave, capture.source_slave, capture.register_name)):
+                                for preview_line in format_instantaneous_preview_lines(
+                                    capture,
+                                    snapshot=preview_snapshot,
+                                ):
+                                    logger.info(preview_line)
+                                last_preview_signatures[
+                                    (capture.target_slave, capture.source_slave, capture.register_name)
+                                ] = preview_signature_value
+                        elif rtu_slave_server and maxem_100:
+                            # Only the instantaneous ABB power register is rewritten; every other Maxem block mirrors ABB.
+                            usage_snapshot = usage_cache.snapshot() if usage_cache is not None else None
+                            if register_name == INSTANTANEOUS_VALUES_REGISTER_NAME:
+                                usage_watts = usage_snapshot.grid_import_watts if usage_snapshot else 0.0
+                                rewritten_values = rewrite_instantaneous_values(
+                                    acload_values,
+                                    usage_watts=usage_watts,
+                                )
+                                maxem_100.set_values(register_name, addr, rewritten_values)
+                            else:
+                                maxem_100.set_values(register_name, addr, acload_values)
+                    if dry_run_maxem_home:
+                        continue
+
+                    tesla_values = tcp_master.execute(2, cst.READ_HOLDING_REGISTERS, addr, addr_len)
+                    if tesla_values and rtu_slave_server and maxem_2:
                         maxem_2.set_values(register_name, addr, tesla_values)
 
-            logger.info(f"RTU slave data updated.")
+                if not dry_run_maxem_home:
+                    logger.info(f"RTU slave data updated.")
+            except Exception as exc:
+                logger.error(f"loop error: {exc}")
 
-        except Exception as _E:
-            logger.error(f"tcp_master(error): {_E}")
-            tcp_master.close()
-
-
-MAXEM_HOLDING_REGISTERS = dict({
-    "total_accumulators":  (0x5000, 44),
-    "by_tariff": (0x5170, 58),
-    "per_phase": (0x5460, 108),
-    "instantaneous_values": (0x5b00, 66),
-    "inputs_outpus": (0x6300, 32),
-    "data_identification": (0x8900, 96),
-    "misc": (0x8A07, 30),
-    "settings": (0x8c04, 8),
-})
-
-VICTRON_HOLDING_REGISTERS = dict({
-    "hw_version":  (0x8960, 6),
-    "fw_version":  (0x8908, 8),
-    "serial":  (0x8900, 2),
-    "usage": (0x5b00, 48),
-    "line_import_export": (0x5460, 24),
-    "total_import_export":  (0x5000, 8),
-})
-
+    except KeyboardInterrupt:
+        logger.info("Shutdown requested via Ctrl-C; stopping cleanly...")
+    except Exception as exc:
+        logger.error(f"tcp_master(error): {exc}")
+    finally:
+        _stop_runtime(tcp_master, tcp_slave_server, rtu_slave_server, usage_poller)
 
 if __name__ == "__main__":
     main()
