@@ -217,9 +217,22 @@ def main():
                                     (capture.target_slave, capture.source_slave, capture.register_name)
                                 ] = preview_signature_value
                         elif rtu_slave_server and maxem_100:
-                            # Only the instantaneous ABB power register is rewritten; every other Maxem block mirrors ABB.
+                            # Rewrite the instantaneous ABB power block from Domoticz Usage; mirror every other Maxem block.
                             usage_snapshot = usage_cache.snapshot() if usage_cache is not None else None
                             if register_name == INSTANTANEOUS_VALUES_REGISTER_NAME:
+                                live_preview_signature = preview_signature(
+                                    capture,
+                                    snapshot=usage_snapshot,
+                                )
+                                if live_preview_signature != last_preview_signatures.get((capture.target_slave, capture.source_slave, capture.register_name)):
+                                    for preview_line in format_instantaneous_preview_lines(
+                                        capture,
+                                        snapshot=usage_snapshot,
+                                    ):
+                                        logger.info(preview_line)
+                                    last_preview_signatures[
+                                        (capture.target_slave, capture.source_slave, capture.register_name)
+                                    ] = live_preview_signature
                                 usage_watts = usage_snapshot.grid_import_watts if usage_snapshot else 0.0
                                 rewritten_values = rewrite_instantaneous_values(
                                     acload_values,

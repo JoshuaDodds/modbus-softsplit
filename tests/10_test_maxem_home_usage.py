@@ -1,11 +1,18 @@
 import unittest
 
 from lib.maxem_home_usage import (
+    INSTANTANEOUS_ACTIVE_POWER_L1_OFFSET,
+    INSTANTANEOUS_ACTIVE_POWER_L2_OFFSET,
+    INSTANTANEOUS_ACTIVE_POWER_L3_OFFSET,
     DomoticzUsageSnapshot,
+    INSTANTANEOUS_CURRENT_L1_OFFSET,
+    INSTANTANEOUS_CURRENT_L2_OFFSET,
+    INSTANTANEOUS_CURRENT_L3_OFFSET,
     INSTANTANEOUS_ACTIVE_POWER_TOTAL_OFFSET,
     INSTANTANEOUS_VALUES_REGISTER_ADDRESS,
     INSTANTANEOUS_VALUES_REGISTER_LENGTH,
     INSTANTANEOUS_VALUES_REGISTER_NAME,
+    decode_unsigned_scaled_amperes,
     decode_signed_scaled_watts,
     describe_instantaneous_preview_basis,
     encode_signed_scaled_watts,
@@ -60,6 +67,42 @@ class MaxemHomeUsageTests(unittest.TestCase):
         rewritten = rewrite_instantaneous_values(capture.source_values, usage_watts=-25.0)
         self.assertAlmostEqual(decode_signed_scaled_watts(rewritten), 0.0)
 
+    def test_instantaneous_phase_amps_follow_domoticz_usage(self) -> None:
+        capture = _instantaneous_capture(1234.5)
+
+        rewritten = rewrite_instantaneous_values(capture.source_values, usage_watts=18.0)
+
+        self.assertAlmostEqual(
+            decode_signed_scaled_watts(rewritten, offset=INSTANTANEOUS_ACTIVE_POWER_L1_OFFSET),
+            6.0,
+            places=2,
+        )
+        self.assertAlmostEqual(
+            decode_signed_scaled_watts(rewritten, offset=INSTANTANEOUS_ACTIVE_POWER_L2_OFFSET),
+            6.0,
+            places=2,
+        )
+        self.assertAlmostEqual(
+            decode_signed_scaled_watts(rewritten, offset=INSTANTANEOUS_ACTIVE_POWER_L3_OFFSET),
+            6.0,
+            places=2,
+        )
+        self.assertAlmostEqual(
+            decode_unsigned_scaled_amperes(rewritten, offset=INSTANTANEOUS_CURRENT_L1_OFFSET),
+            0.03,
+            places=2,
+        )
+        self.assertAlmostEqual(
+            decode_unsigned_scaled_amperes(rewritten, offset=INSTANTANEOUS_CURRENT_L2_OFFSET),
+            0.03,
+            places=2,
+        )
+        self.assertAlmostEqual(
+            decode_unsigned_scaled_amperes(rewritten, offset=INSTANTANEOUS_CURRENT_L3_OFFSET),
+            0.03,
+            places=2,
+        )
+
     def test_preview_message_is_about_grid_import_watts(self) -> None:
         capture = _instantaneous_capture(1234.5)
         snapshot = DomoticzUsageSnapshot(
@@ -80,6 +123,7 @@ class MaxemHomeUsageTests(unittest.TestCase):
             [
                 "ABB source: 1,234.50 W",
                 "DZ Usage to Maxem: 18 W",
+                "DZ Phase amps to Maxem: L1=0.03 A, L2=0.03 A, L3=0.03 A",
             ],
         )
 

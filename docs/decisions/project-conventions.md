@@ -10,9 +10,14 @@ operator-facing assumptions for `modbus-softsplit`.
 - House load is ignored for the Maxem rewrite path.
 - Negative values are clamped to `0` before encoding.
 - The ABB target register is `instantaneous_values` at `0x5B14/0x5B15`.
+- All other Maxem register blocks are mirrored unchanged from the ABB source.
 - Preview logs should stay short and verifiable:
   - `ABB source: X W`
   - `DZ Usage to Maxem: Y W`
+  - `DZ Phase amps to Maxem: L1=..., L2=..., L3=...`
+- The live RTU path should emit the same short preview when the instantaneous
+  rewrite value changes so operators can verify the actual write path without
+  enabling dry-run mode.
 
 ## Register Tooling
 
