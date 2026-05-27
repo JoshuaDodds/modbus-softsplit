@@ -73,6 +73,11 @@ Run for an extended window (for example 2-8 hours) and monitor:
 ## Known Observability Notes
 
 - `invalid request: Request length is invalid 1` messages may originate from malformed external Modbus client traffic and are not automatically a rewrite fault.
+- By default the runtime suppresses only that exact 1-byte RTU noise line
+  (`SUPPRESS_SHORT_RTU_REQUEST_LOGS=1`). Set `SUPPRESS_SHORT_RTU_REQUEST_LOGS=0`
+  when you need raw-wire troubleshooting logs.
+- Loop status logs are emitted as heartbeat summaries (default every 30s). Tune
+  with `STATUS_LOG_INTERVAL_SECONDS`.
 - ABB sentinels such as `0xFFFF` may decode as `n/a` in diagnostics.
 
 ## Exit Criteria

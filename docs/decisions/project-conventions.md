@@ -48,6 +48,13 @@ operator-facing assumptions for `modbus-softsplit`.
 - `--trace-instantaneous-payload` is opt-in and intended for diagnostics only.
 - Domoticz polling must stay off the RTU serving path and remain non-blocking.
 - The serving loop should remain timing-safe for the RTU client.
+- High-volume loop status logs should be periodic instead of per-cycle to avoid
+  unnecessary log I/O overhead (`STATUS_LOG_INTERVAL_SECONDS`, default `30`).
+- RTU protocol validation must remain strict; do not reinterpret malformed
+  short frames as valid requests.
+- `SUPPRESS_SHORT_RTU_REQUEST_LOGS=1` (default) suppresses only the specific
+  known-noise line `invalid request: Request length is invalid 1` at logging
+  time, without changing RTU frame parsing behavior.
 
 ## Documentation and Memory Hygiene
 

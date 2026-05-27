@@ -24,6 +24,9 @@ the two "virtual" Slave/Client devices, in essence, create 2 new data buses (one
 and allow each of the physical Master/Server devices to have exclusive communication to the "virtual" slaves on these 2 
 new "virtual" buses.
 
+This architecture is intentionally generic and can be adapted for other Modbus device families; ABB meter mapping is the
+current implementation profile, not a hard project limitation.
+
 ![screenshot](/layout.png?raw=true)
 
 ## Notes on this implementation:
@@ -44,7 +47,7 @@ your specific situation.
   `ABB source: X W`, `DZ Usage to Maxem: Y W`, and `DZ Phase Watts to Maxem: L1=..., L2=..., L3=...`.
 - The corrected v1 story is to source Domoticz IDX 20 `Usage` as the live grid-import watt reading, clamp any negative
   net value to zero, and encode the result into the ABB-compatible instantaneous active-power registers:
-  `0x5B14/0x5B15` (total) and `0x5B16/0x5B18/0x5B1A` (phase L1/L2/L3). Phase watt inputs come from Domoticz
+  `0x5B14/0x5B15` (total), `0x5B16/0x5B17` (L1), `0x5B18/0x5B19` (L2), and `0x5B1A/0x5B1B` (L3). Phase watt inputs come from Domoticz
   `result.Data` at `rid=26` (L1), `rid=25` (L2), and `rid=24` (L3). House load is not forwarded to Maxem.
   The earlier cumulative-counter preview was a prototype interpretation and is deprecated.
 - The dry-run logger prints one semantic line before the preview values so it is obvious that the preview is the
@@ -79,6 +82,9 @@ your specific situation.
 - The main loop now handles `Ctrl-C` cleanly in one interrupt and stops the poller and servers without a traceback.
 - Canonical project-specific runtime rules and durable decisions live in
   `docs/decisions/project-conventions.md`.
+- Long-run logging/observability tuning is controlled with:
+  - `SUPPRESS_SHORT_RTU_REQUEST_LOGS=1` (default) to suppress only `invalid request: Request length is invalid 1`.
+  - `STATUS_LOG_INTERVAL_SECONDS=30` (default) to emit periodic heartbeat summaries instead of per-loop update spam.
 
 ## Tested Hardware
 This has been tested with the Exar USB to RS-485 adapter and with the Waveshare CAN Hat (CANbus and RS-485 add-on) for

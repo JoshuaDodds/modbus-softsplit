@@ -2,9 +2,11 @@
 import argparse
 import logging as logger
 import os
+import time
 
 from dotenv import dotenv_values
 
+import modbus_tk
 import modbus_tk.defines as cst
 from modbus_tk import modbus_rtu, modbus_tcp
 
@@ -71,11 +73,71 @@ DOMOTICZ_USAGE_POLL_INTERVAL_SECONDS = float(
 DOMOTICZ_PHASE_L1_IDX = int(_get_setting("DOMOTICZ_PHASE_L1_IDX", "26"))
 DOMOTICZ_PHASE_L2_IDX = int(_get_setting("DOMOTICZ_PHASE_L2_IDX", "25"))
 DOMOTICZ_PHASE_L3_IDX = int(_get_setting("DOMOTICZ_PHASE_L3_IDX", "24"))
+STATUS_LOG_INTERVAL_SECONDS = max(float(_get_setting("STATUS_LOG_INTERVAL_SECONDS", "30.0")), 0.0)
+SUPPRESS_SHORT_RTU_REQUEST_LOGS = str(_get_setting("SUPPRESS_SHORT_RTU_REQUEST_LOGS", "1")).strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 
 logger.basicConfig(
     format='%(asctime)s modbus-gw: %(message)s',
     level=logger.INFO,
     datefmt='%Y-%m-%d %H:%M:%S')
+
+
+class _SuppressShortRtuRequestNoiseFilter(logger.Filter):
+    _noise_message = "invalid request: Request length is invalid 1"
+
+    def filter(self, record: logger.LogRecord) -> bool:
+        if record.name != "modbus_tk":
+            return True
+        try:
+            return record.getMessage() != self._noise_message
+        except Exception:  # pragma: no cover - defensive fallback
+            return True
+
+
+class _LoopStatusTicker:
+    def __init__(self, interval_seconds: float) -> None:
+        self._interval_seconds = max(float(interval_seconds), 0.0)
+        self._next_log_time = time.monotonic() + self._interval_seconds if self._interval_seconds > 0.0 else 0.0
+        self._tcp_cycles = 0
+        self._rtu_cycles = 0
+        self._loop_errors = 0
+
+    def mark_tcp_cycle(self) -> None:
+        self._tcp_cycles += 1
+
+    def mark_rtu_cycle(self) -> None:
+        self._rtu_cycles += 1
+
+    def mark_loop_error(self) -> None:
+        self._loop_errors += 1
+
+    def maybe_log(self) -> None:
+        if self._interval_seconds <= 0.0:
+            return
+
+        now = time.monotonic()
+        if now < self._next_log_time:
+            return
+
+        logger.info(
+            "Mirror loop heartbeat: tcp_cycles=%d rtu_cycles=%d loop_errors=%d",
+            self._tcp_cycles,
+            self._rtu_cycles,
+            self._loop_errors,
+        )
+        self._tcp_cycles = 0
+        self._rtu_cycles = 0
+        self._loop_errors = 0
+        self._next_log_time = now + self._interval_seconds
+
+
+if SUPPRESS_SHORT_RTU_REQUEST_LOGS:
+    modbus_tk.LOGGER.addFilter(_SuppressShortRtuRequestNoiseFilter())
 
 
 def _stop_runtime(
@@ -111,6 +173,7 @@ def main():
     usage_cache = None
     usage_poller = None
     tcp_master = None
+    status_ticker = _LoopStatusTicker(STATUS_LOG_INTERVAL_SECONDS)
 
     try:
         tcp_slave_server = modbus_tcp.TcpServer(port=502)
@@ -196,8 +259,7 @@ def main():
                     if tesla_values:
                         if tcp_slave_server and victron_2:
                             victron_2.set_values(register_name, addr, tesla_values)
-                if not dry_run_maxem_home:
-                    logger.info(f"TCP slave data updated.")
+                status_ticker.mark_tcp_cycle()
 
                 # Maxem
                 for register_name in MAXEM_HOLDING_REGISTERS:
@@ -209,15 +271,15 @@ def main():
 
                     acload_values = tcp_master.execute(100, cst.READ_HOLDING_REGISTERS, addr, addr_len)
                     if acload_values:
-                        capture = RegisterCapture(
-                            target_slave=100,
-                            source_slave=100,
-                            register_name=register_name,
-                            address=addr,
-                            address_length=addr_len,
-                            source_values=tuple(int(value) for value in acload_values),
-                        )
                         if dry_run_maxem_home:
+                            capture = RegisterCapture(
+                                target_slave=100,
+                                source_slave=100,
+                                register_name=register_name,
+                                address=addr,
+                                address_length=addr_len,
+                                source_values=tuple(int(value) for value in acload_values),
+                            )
                             preview_snapshot = usage_cache.snapshot() if usage_cache is not None else None
                             usage_watts = preview_snapshot.grid_import_watts if preview_snapshot else 0.0
                             phase_usage_watts = preview_snapshot.phase_usage_watts if preview_snapshot else None
@@ -244,8 +306,16 @@ def main():
                                 ] = preview_signature_value
                         elif rtu_slave_server and maxem_100:
                             # Rewrite the instantaneous ABB power block from Domoticz Usage; mirror every other Maxem block.
-                            usage_snapshot = usage_cache.snapshot() if usage_cache is not None else None
                             if register_name == INSTANTANEOUS_VALUES_REGISTER_NAME:
+                                usage_snapshot = usage_cache.snapshot() if usage_cache is not None else None
+                                capture = RegisterCapture(
+                                    target_slave=100,
+                                    source_slave=100,
+                                    register_name=register_name,
+                                    address=addr,
+                                    address_length=addr_len,
+                                    source_values=tuple(int(value) for value in acload_values),
+                                )
                                 usage_watts = usage_snapshot.grid_import_watts if usage_snapshot else 0.0
                                 phase_usage_watts = usage_snapshot.phase_usage_watts if usage_snapshot else None
                                 rewritten_values = rewrite_instantaneous_values(
@@ -280,8 +350,10 @@ def main():
                         maxem_2.set_values(register_name, addr, tesla_values)
 
                 if not dry_run_maxem_home:
-                    logger.info(f"RTU slave data updated.")
+                    status_ticker.mark_rtu_cycle()
+                status_ticker.maybe_log()
             except Exception as exc:
+                status_ticker.mark_loop_error()
                 logger.error(f"loop error: {exc}")
 
     except KeyboardInterrupt:
