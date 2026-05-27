@@ -45,6 +45,7 @@ your specific situation.
   behavior.
 - In dry-run mode the Maxem preview is intentionally short and easy to compare against dashboards:
   `ABB source: X W`, `DZ Usage to Maxem: Y W`, and `DZ Phase Watts to Maxem: L1=..., L2=..., L3=...`.
+  These lines are emitted at `DEBUG` level (set `LOG_LEVEL=DEBUG` when you want them).
 - The corrected v1 story is to source Domoticz IDX 20 `Usage` as the live grid-import watt reading, clamp any negative
   net value to zero, and encode the result into the ABB-compatible instantaneous active-power registers:
   `0x5B14/0x5B15` (total), `0x5B16/0x5B17` (L1), `0x5B18/0x5B19` (L2), and `0x5B1A/0x5B1B` (L3). Phase watt inputs come from Domoticz
@@ -79,6 +80,7 @@ your specific situation.
   source vs rewritten values plus the exact word addresses that changed.
 - `python3 main.py --trace-instantaneous-payload` enables the same field-level diff in live runtime logs so we can
   verify exactly what is being written without changing default behavior.
+- `LOG_LEVEL` defaults to `INFO`; set `LOG_LEVEL=DEBUG` to show preview lines (`ABB source` / `DZ ... to Maxem`).
 - The main loop now handles `Ctrl-C` cleanly in one interrupt and stops the poller and servers without a traceback.
 - Canonical project-specific runtime rules and durable decisions live in
   `docs/decisions/project-conventions.md`.

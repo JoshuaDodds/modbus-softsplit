@@ -40,7 +40,7 @@ Expected:
 Run live with field-level trace:
 
 ```bash
-python3 -u main.py --trace-instantaneous-payload
+LOG_LEVEL=DEBUG python3 -u main.py --trace-instantaneous-payload
 ```
 
 Watch for:

@@ -73,6 +73,8 @@ DOMOTICZ_USAGE_POLL_INTERVAL_SECONDS = float(
 DOMOTICZ_PHASE_L1_IDX = int(_get_setting("DOMOTICZ_PHASE_L1_IDX", "26"))
 DOMOTICZ_PHASE_L2_IDX = int(_get_setting("DOMOTICZ_PHASE_L2_IDX", "25"))
 DOMOTICZ_PHASE_L3_IDX = int(_get_setting("DOMOTICZ_PHASE_L3_IDX", "24"))
+LOG_LEVEL_NAME = str(_get_setting("LOG_LEVEL", "INFO")).strip().upper()
+LOG_LEVEL = getattr(logger, LOG_LEVEL_NAME, logger.INFO)
 STATUS_LOG_INTERVAL_SECONDS = max(float(_get_setting("STATUS_LOG_INTERVAL_SECONDS", "30.0")), 0.0)
 SUPPRESS_SHORT_RTU_REQUEST_LOGS = str(_get_setting("SUPPRESS_SHORT_RTU_REQUEST_LOGS", "1")).strip().lower() not in {
     "0",
@@ -83,7 +85,7 @@ SUPPRESS_SHORT_RTU_REQUEST_LOGS = str(_get_setting("SUPPRESS_SHORT_RTU_REQUEST_L
 
 logger.basicConfig(
     format='%(asctime)s modbus-gw: %(message)s',
-    level=logger.INFO,
+    level=LOG_LEVEL,
     datefmt='%Y-%m-%d %H:%M:%S')
 
 
@@ -297,7 +299,7 @@ def main():
                                     capture,
                                     snapshot=preview_snapshot,
                                 ):
-                                    logger.info(preview_line)
+                                    logger.debug(preview_line)
                                 if trace_instantaneous_payload:
                                     for trace_line in format_instantaneous_diff_lines(capture.source_values, rewritten_values):
                                         logger.info(f"trace {trace_line}")
@@ -332,7 +334,7 @@ def main():
                                         capture,
                                         snapshot=usage_snapshot,
                                     ):
-                                        logger.info(preview_line)
+                                        logger.debug(preview_line)
                                     if trace_instantaneous_payload:
                                         for trace_line in format_instantaneous_diff_lines(capture.source_values, rewritten_values):
                                             logger.info(f"trace {trace_line}")

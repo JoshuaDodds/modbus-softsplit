@@ -22,6 +22,8 @@ operator-facing assumptions for `modbus-softsplit`.
   - `ABB source: X W`
   - `DZ Usage to Maxem: Y W`
   - `DZ Phase Watts to Maxem: L1=..., L2=..., L3=...`
+- These preview lines are logged at `DEBUG` level and are intended as opt-in
+  operator diagnostics (`LOG_LEVEL=DEBUG`).
 - The live RTU path should emit the same short preview when the instantaneous
   rewrite value changes so operators can verify the actual write path without
   enabling dry-run mode.
