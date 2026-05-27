@@ -41,12 +41,11 @@ your specific situation.
   writing values into the RTU slave. This keeps the RTU serving path quiet while we inspect the intended rewrite
   behavior.
 - In dry-run mode the Maxem preview is intentionally short and easy to compare against dashboards:
-  `ABB source: X W`, `DZ Usage to Maxem: Y W`, and `DZ Phase amps to Maxem: L1=..., L2=..., L3=...`.
+  `ABB source: X W` and `DZ Usage to Maxem: Y W`.
 - The corrected v1 story is to source Domoticz IDX 20 `Usage` as the live grid-import watt reading, clamp any negative
   net value to zero, and encode the result into the ABB-compatible instantaneous active-power register at
   `0x5B14/0x5B15`. House load is not forwarded to Maxem. The earlier cumulative-counter preview was a prototype
-  interpretation and is deprecated. The instantaneous phase power and phase current fields move with the rewritten
-  value so Maxem sees a consistent ABB-shaped instantaneous block.
+  interpretation and is deprecated. All other words in `instantaneous_values` are mirrored verbatim from ABB.
 - The dry-run logger prints one semantic line before the preview values so it is obvious that the preview is the
   ABB instantaneous power register being rewritten from Domoticz `Usage`.
 - Register bundle captures and replay previews live under `tools/`. The dump helper defaults to `instantaneous_values`
@@ -55,7 +54,6 @@ your specific situation.
   - `ABB source` is the decoded instantaneous active-power total from ABB.
   - `DZ Usage to Maxem` is the Domoticz IDX 20 grid-import watt reading after clamping negatives to zero and encoding
     it back into the ABB register format.
-  - `DZ Phase amps to Maxem` is the corresponding ABB-shaped phase-current rewrite derived from the same live usage.
 - Core application modules now live under `lib/` so the repo root stays focused on the entrypoint, tools,
   and docs.
 
@@ -69,8 +67,8 @@ your specific situation.
   `python3 tools/replay_maxem_preview.py --help` before using real captures.
 - `python3 tools/dump_register_block.py` defaults to the ABB `instantaneous_values` block; pass `--register` to add
   extra blocks only when you truly need them.
-- `python3 tools/replay_maxem_preview.py --bundle <file>` prints the same `ABB source`, `DZ Usage to Maxem`, and
-  `DZ Phase amps to Maxem` preview lines that the dry-run runtime uses.
+- `python3 tools/replay_maxem_preview.py --bundle <file>` prints the same `ABB source` and `DZ Usage to Maxem`
+  preview lines that the dry-run runtime uses.
 - The main loop now handles `Ctrl-C` cleanly in one interrupt and stops the poller and servers without a traceback.
 - Canonical project-specific runtime rules and durable decisions live in
   `docs/decisions/project-conventions.md`.

@@ -135,7 +135,6 @@ def test_replay_preview_highlights_the_grid_import_rewrite(tmp_path) -> None:
     assert lines == [
         "ABB source: 1,234.50 W",
         "DZ Usage to Maxem: 500 W",
-        "DZ Phase amps to Maxem: L1=0.72 A, L2=0.72 A, L3=0.72 A",
     ]
 
 

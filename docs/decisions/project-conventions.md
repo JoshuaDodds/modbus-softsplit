@@ -14,7 +14,6 @@ operator-facing assumptions for `modbus-softsplit`.
 - Preview logs should stay short and verifiable:
   - `ABB source: X W`
   - `DZ Usage to Maxem: Y W`
-  - `DZ Phase amps to Maxem: L1=..., L2=..., L3=...`
 - The live RTU path should emit the same short preview when the instantaneous
   rewrite value changes so operators can verify the actual write path without
   enabling dry-run mode.
