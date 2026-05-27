@@ -34,6 +34,8 @@ operator-facing assumptions for `modbus-softsplit`.
 - `tools/inspect_instantaneous_payload.py` is the deep-dive tool for unpacking
   ABB source vs rewritten payload values and showing exactly which
   `instantaneous_values` words changed.
+- `docs/runbooks/maxem-live-validation.md` is the canonical operational
+  checklist for long-running live validation.
 - `docs/Maxem MX Home 4 handleiding.pdf` is installation/wiring guidance and
   useful for system behavior context, but does not replace ABB register mapping
   references.
