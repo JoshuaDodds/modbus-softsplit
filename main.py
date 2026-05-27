@@ -16,6 +16,7 @@ from lib.maxem_home_usage import (
     DomoticzUsagePoller,
     INSTANTANEOUS_VALUES_REGISTER_NAME,
     describe_instantaneous_preview_basis,
+    format_instantaneous_diff_lines,
     format_instantaneous_preview_lines,
     preview_signature,
     rewrite_instantaneous_values,
@@ -47,6 +48,14 @@ def _parse_args(argv=None):
             "to the RTU slave."
         ),
     )
+    parser.add_argument(
+        "--trace-instantaneous-payload",
+        action="store_true",
+        help=(
+            "Log detailed field-level ABB source vs rewritten instantaneous_values diagnostics "
+            "(for deep-dive debugging)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -59,6 +68,9 @@ DOMOTICZ_TIMEOUT_SECONDS = float(_get_setting("DOMOTICZ_TIMEOUT_SECONDS", "1.0")
 DOMOTICZ_USAGE_POLL_INTERVAL_SECONDS = float(
     _get_setting("DOMOTICZ_USAGE_POLL_INTERVAL_SECONDS", "5.0")
 )
+DOMOTICZ_PHASE_L1_IDX = int(_get_setting("DOMOTICZ_PHASE_L1_IDX", "26"))
+DOMOTICZ_PHASE_L2_IDX = int(_get_setting("DOMOTICZ_PHASE_L2_IDX", "25"))
+DOMOTICZ_PHASE_L3_IDX = int(_get_setting("DOMOTICZ_PHASE_L3_IDX", "24"))
 
 logger.basicConfig(
     format='%(asctime)s modbus-gw: %(message)s',
@@ -89,6 +101,7 @@ def _stop_runtime(
 def main():
     args = _parse_args()
     dry_run_maxem_home = args.dry_run_maxem_home
+    trace_instantaneous_payload = args.trace_instantaneous_payload
     tcp_slave_server = None
     rtu_slave_server = None
     maxem_100 = None
@@ -125,6 +138,9 @@ def main():
         usage_poller = DomoticzUsagePoller(
             domoticz_client,
             usage_cache,
+            phase_l1_idx=DOMOTICZ_PHASE_L1_IDX,
+            phase_l2_idx=DOMOTICZ_PHASE_L2_IDX,
+            phase_l3_idx=DOMOTICZ_PHASE_L3_IDX,
             poll_interval_seconds=DOMOTICZ_USAGE_POLL_INTERVAL_SECONDS,
             logger=logger,
         )
@@ -203,6 +219,13 @@ def main():
                         )
                         if dry_run_maxem_home:
                             preview_snapshot = usage_cache.snapshot() if usage_cache is not None else None
+                            usage_watts = preview_snapshot.grid_import_watts if preview_snapshot else 0.0
+                            phase_usage_watts = preview_snapshot.phase_usage_watts if preview_snapshot else None
+                            rewritten_values = rewrite_instantaneous_values(
+                                acload_values,
+                                usage_watts=usage_watts,
+                                phase_usage_watts=phase_usage_watts,
+                            )
                             preview_signature_value = preview_signature(
                                 capture,
                                 snapshot=preview_snapshot,
@@ -213,6 +236,9 @@ def main():
                                     snapshot=preview_snapshot,
                                 ):
                                     logger.info(preview_line)
+                                if trace_instantaneous_payload:
+                                    for trace_line in format_instantaneous_diff_lines(capture.source_values, rewritten_values):
+                                        logger.info(f"trace {trace_line}")
                                 last_preview_signatures[
                                     (capture.target_slave, capture.source_slave, capture.register_name)
                                 ] = preview_signature_value
@@ -220,6 +246,13 @@ def main():
                             # Rewrite the instantaneous ABB power block from Domoticz Usage; mirror every other Maxem block.
                             usage_snapshot = usage_cache.snapshot() if usage_cache is not None else None
                             if register_name == INSTANTANEOUS_VALUES_REGISTER_NAME:
+                                usage_watts = usage_snapshot.grid_import_watts if usage_snapshot else 0.0
+                                phase_usage_watts = usage_snapshot.phase_usage_watts if usage_snapshot else None
+                                rewritten_values = rewrite_instantaneous_values(
+                                    acload_values,
+                                    usage_watts=usage_watts,
+                                    phase_usage_watts=phase_usage_watts,
+                                )
                                 live_preview_signature = preview_signature(
                                     capture,
                                     snapshot=usage_snapshot,
@@ -230,14 +263,12 @@ def main():
                                         snapshot=usage_snapshot,
                                     ):
                                         logger.info(preview_line)
+                                    if trace_instantaneous_payload:
+                                        for trace_line in format_instantaneous_diff_lines(capture.source_values, rewritten_values):
+                                            logger.info(f"trace {trace_line}")
                                     last_preview_signatures[
                                         (capture.target_slave, capture.source_slave, capture.register_name)
                                     ] = live_preview_signature
-                                usage_watts = usage_snapshot.grid_import_watts if usage_snapshot else 0.0
-                                rewritten_values = rewrite_instantaneous_values(
-                                    acload_values,
-                                    usage_watts=usage_watts,
-                                )
                                 maxem_100.set_values(register_name, addr, rewritten_values)
                             else:
                                 maxem_100.set_values(register_name, addr, acload_values)

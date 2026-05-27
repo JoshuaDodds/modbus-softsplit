@@ -454,13 +454,36 @@ class DomoticzClient:
     def url(self) -> str:
         return f"{self._base_url}/json.htm?type=devices&rid={self._grid_idx}"
 
-    def fetch_reading(self) -> DomoticzReading:
+    def url_for_idx(self, rid: int) -> str:
+        return f"{self._base_url}/json.htm?type=devices&rid={int(rid)}"
+
+    def fetch_payload(self, *, rid: int | None = None) -> Mapping[str, Any]:
         if not self.enabled:
             raise RuntimeError("Domoticz client is disabled because no base URL was configured")
 
-        request = Request(self.url, headers={"Accept": "application/json", "User-Agent": "modbus-softsplit/1.0"})
+        target_url = self.url if rid is None else self.url_for_idx(rid)
+        request = Request(target_url, headers={"Accept": "application/json", "User-Agent": "modbus-softsplit/1.0"})
         with urlopen(request, timeout=self._timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(payload, Mapping):
+            raise TypeError("Domoticz payload must be a mapping")
+        return payload
+
+    def fetch_data_watts(self, rid: int) -> float:
+        payload = self.fetch_payload(rid=rid)
+        candidate: Mapping[str, Any]
+        result = payload.get("result")
+        if isinstance(result, list) and result:
+            candidate = result[0]
+        else:
+            candidate = payload
+
+        if not isinstance(candidate, Mapping):
+            raise TypeError("Domoticz payload result must be a mapping")
+        return _coerce_float(candidate, "Data")
+
+    def fetch_reading(self) -> DomoticzReading:
+        payload = self.fetch_payload()
         return DomoticzReading.from_payload(payload)
 
 

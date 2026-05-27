@@ -56,6 +56,7 @@ def build_dump_bundle(
     domoticz_reading: DomoticzReading | None,
     domoticz_url: str | None,
     domoticz_grid_idx: int | None,
+    domoticz_phase_usage_watts: Sequence[float] | None = None,
 ) -> dict[str, object]:
     return {
         "bundle_format_version": BUNDLE_FORMAT_VERSION,
@@ -72,6 +73,7 @@ def build_dump_bundle(
             "url": domoticz_url,
             "grid_idx": domoticz_grid_idx,
             "reading": domoticz_reading.to_dict() if domoticz_reading else None,
+            "phase_usage_watts": [float(value) for value in domoticz_phase_usage_watts] if domoticz_phase_usage_watts else None,
         },
         "captures": [register_capture_to_dict(capture) for capture in captures],
     }
@@ -126,8 +128,14 @@ def build_replay_snapshot(
     bundle: Mapping[str, Any],
 ) -> DomoticzUsageSnapshot:
     reading = bundle_domoticz_reading(bundle)
+    domoticz_block = bundle.get("domoticz", {})
+    phase_usage_watts = None
+    if isinstance(domoticz_block, Mapping):
+        raw_phase_values = domoticz_block.get("phase_usage_watts")
+        if isinstance(raw_phase_values, Sequence) and len(raw_phase_values) == 3:
+            phase_usage_watts = tuple(float(value) for value in raw_phase_values)
     sequence = 1 if reading is not None else 0
-    return DomoticzUsageSnapshot(sequence=sequence, reading=reading)
+    return DomoticzUsageSnapshot(sequence=sequence, reading=reading, phase_usage_watts=phase_usage_watts)
 
 
 def build_replay_preview_lines(

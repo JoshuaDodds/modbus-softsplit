@@ -75,6 +75,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Domoticz grid device index. Defaults to DOMOTICZ_GRID_IDX or 20.",
     )
     parser.add_argument(
+        "--domoticz-phase-l1-idx",
+        type=int,
+        default=int(_get_env_setting("DOMOTICZ_PHASE_L1_IDX", "26")),
+        help="Domoticz phase L1 device index. Defaults to DOMOTICZ_PHASE_L1_IDX or 26.",
+    )
+    parser.add_argument(
+        "--domoticz-phase-l2-idx",
+        type=int,
+        default=int(_get_env_setting("DOMOTICZ_PHASE_L2_IDX", "25")),
+        help="Domoticz phase L2 device index. Defaults to DOMOTICZ_PHASE_L2_IDX or 25.",
+    )
+    parser.add_argument(
+        "--domoticz-phase-l3-idx",
+        type=int,
+        default=int(_get_env_setting("DOMOTICZ_PHASE_L3_IDX", "24")),
+        help="Domoticz phase L3 device index. Defaults to DOMOTICZ_PHASE_L3_IDX or 24.",
+    )
+    parser.add_argument(
         "--domoticz-timeout",
         type=float,
         default=float(_get_env_setting("DOMOTICZ_TIMEOUT_SECONDS", "1.0")),
@@ -124,6 +142,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
         domoticz_reading = None
+        domoticz_phase_usage_watts = None
         domoticz_url = None
         domoticz_grid_idx = None
         if not args.skip_domoticz:
@@ -133,6 +152,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 timeout_seconds=args.domoticz_timeout,
             )
             domoticz_reading = domoticz_client.fetch_reading()
+            domoticz_phase_usage_watts = (
+                domoticz_client.fetch_data_watts(args.domoticz_phase_l1_idx),
+                domoticz_client.fetch_data_watts(args.domoticz_phase_l2_idx),
+                domoticz_client.fetch_data_watts(args.domoticz_phase_l3_idx),
+            )
             domoticz_url = domoticz_client.url
             domoticz_grid_idx = args.domoticz_grid_idx
 
@@ -145,6 +169,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             domoticz_reading=domoticz_reading,
             domoticz_url=domoticz_url,
             domoticz_grid_idx=domoticz_grid_idx,
+            domoticz_phase_usage_watts=domoticz_phase_usage_watts,
         )
         write_dump_bundle(bundle, output_path=args.output_path)
     finally:

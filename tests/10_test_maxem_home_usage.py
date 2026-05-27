@@ -2,13 +2,19 @@ import unittest
 
 from lib.maxem_home_usage import (
     DomoticzUsageSnapshot,
+    INSTANTANEOUS_ACTIVE_POWER_L1_REGISTER_ADDRESS,
+    INSTANTANEOUS_ACTIVE_POWER_L2_REGISTER_ADDRESS,
+    INSTANTANEOUS_ACTIVE_POWER_L3_REGISTER_ADDRESS,
     INSTANTANEOUS_ACTIVE_POWER_TOTAL_OFFSET,
     INSTANTANEOUS_VALUES_REGISTER_ADDRESS,
     INSTANTANEOUS_VALUES_REGISTER_LENGTH,
     INSTANTANEOUS_VALUES_REGISTER_NAME,
+    changed_instantaneous_words,
+    decode_instantaneous_fields,
     decode_signed_scaled_watts,
     describe_instantaneous_preview_basis,
     encode_signed_scaled_watts,
+    format_instantaneous_diff_lines,
     format_instantaneous_preview_lines,
     rewrite_instantaneous_values,
 )
@@ -74,6 +80,80 @@ class MaxemHomeUsageTests(unittest.TestCase):
             self.assertEqual(rewritten[index], value)
 
         self.assertAlmostEqual(decode_signed_scaled_watts(rewritten), 18.0)
+        self.assertEqual(changed_instantaneous_words(source_values, rewritten), [0x5B14, 0x5B15])
+
+    def test_instantaneous_rewrites_total_and_phase_power_fields(self) -> None:
+        source_values = [0] * INSTANTANEOUS_VALUES_REGISTER_LENGTH
+        for index in range(len(source_values)):
+            source_values[index] = 20_000 + index
+
+        rewritten = rewrite_instantaneous_values(
+            tuple(source_values),
+            usage_watts=87.0,
+            phase_usage_watts=(1559.24, 1284.30, 1931.40),
+        )
+
+        self.assertAlmostEqual(decode_signed_scaled_watts(rewritten), 87.0, places=2)
+
+        phase_l1_offset = INSTANTANEOUS_ACTIVE_POWER_L1_REGISTER_ADDRESS - INSTANTANEOUS_VALUES_REGISTER_ADDRESS
+        phase_l2_offset = INSTANTANEOUS_ACTIVE_POWER_L2_REGISTER_ADDRESS - INSTANTANEOUS_VALUES_REGISTER_ADDRESS
+        phase_l3_offset = INSTANTANEOUS_ACTIVE_POWER_L3_REGISTER_ADDRESS - INSTANTANEOUS_VALUES_REGISTER_ADDRESS
+        self.assertAlmostEqual(decode_signed_scaled_watts(rewritten, offset=phase_l1_offset), 1559.24, places=2)
+        self.assertAlmostEqual(decode_signed_scaled_watts(rewritten, offset=phase_l2_offset), 1284.30, places=2)
+        self.assertAlmostEqual(decode_signed_scaled_watts(rewritten, offset=phase_l3_offset), 1931.40, places=2)
+
+        changed_words = changed_instantaneous_words(source_values, rewritten)
+        self.assertEqual(changed_words, [0x5B14, 0x5B15, 0x5B16, 0x5B17, 0x5B18, 0x5B19, 0x5B1A, 0x5B1B])
+
+    def test_decode_instantaneous_fields_extracts_expected_values(self) -> None:
+        source_values = [0] * INSTANTANEOUS_VALUES_REGISTER_LENGTH
+
+        def set_field(address: int, scale: float, value: float, *, signed: bool) -> None:
+            offset = address - INSTANTANEOUS_VALUES_REGISTER_ADDRESS
+            raw = int(round(value / scale))
+            if signed:
+                raw &= 0xFFFFFFFF
+            raw = max(min(raw, 0xFFFFFFFF), 0)
+            payload = raw.to_bytes(4, byteorder="big", signed=False)
+            source_values[offset] = int.from_bytes(payload[:2], byteorder="big")
+            source_values[offset + 1] = int.from_bytes(payload[2:], byteorder="big")
+
+        set_field(0x5B00, 0.1, 228.7, signed=False)
+        set_field(0x5B0C, 0.01, 2.34, signed=False)
+        set_field(0x5B0E, 0.01, 1.17, signed=False)
+        set_field(0x5B10, 0.01, 4.38, signed=False)
+        set_field(0x5B14, 0.01, 3470.91, signed=True)
+
+        decoded = decode_instantaneous_fields(source_values)
+
+        self.assertAlmostEqual(decoded["voltage_l1_n"] or 0.0, 228.7, places=1)
+        self.assertAlmostEqual(decoded["current_l1"] or 0.0, 2.34, places=2)
+        self.assertAlmostEqual(decoded["current_l2"] or 0.0, 1.17, places=2)
+        self.assertAlmostEqual(decoded["current_l3"] or 0.0, 4.38, places=2)
+        self.assertAlmostEqual(decoded["active_power_total"] or 0.0, 3470.91, places=2)
+
+    def test_decode_instantaneous_fields_treats_invalid_sentinel_words_as_none(self) -> None:
+        source_values = [0] * INSTANTANEOUS_VALUES_REGISTER_LENGTH
+        current_n_offset = 0x5B12 - INSTANTANEOUS_VALUES_REGISTER_ADDRESS
+        source_values[current_n_offset] = 0xFFFF
+        source_values[current_n_offset + 1] = 0xFFFF
+
+        decoded = decode_instantaneous_fields(source_values)
+
+        self.assertIsNone(decoded["current_n"])
+
+    def test_format_instantaneous_diff_marks_only_total_power_changed(self) -> None:
+        capture = _instantaneous_capture(3470.91)
+        rewritten = rewrite_instantaneous_values(capture.source_values, usage_watts=87.0)
+
+        lines = format_instantaneous_diff_lines(capture.source_values, rewritten)
+        active_total_line = [line for line in lines if line.startswith("active_power_total:")][0]
+        active_l1_line = [line for line in lines if line.startswith("active_power_l1:")][0]
+        changed_words_line = lines[-1]
+
+        self.assertIn("[changed]", active_total_line)
+        self.assertNotIn("[changed]", active_l1_line)
+        self.assertEqual(changed_words_line, "changed_words: 0x5B14, 0x5B15")
 
     def test_preview_message_is_about_grid_import_watts(self) -> None:
         capture = _instantaneous_capture(1234.5)
@@ -86,6 +166,7 @@ class MaxemHomeUsageTests(unittest.TestCase):
                 export_watts=0.0,
                 last_update="2026-05-26 09:00:00",
             ),
+            phase_usage_watts=(10.0, 20.0, 30.0),
         )
 
         message = format_instantaneous_preview_lines(capture, snapshot=snapshot)
@@ -95,6 +176,7 @@ class MaxemHomeUsageTests(unittest.TestCase):
             [
                 "ABB source: 1,234.50 W",
                 "DZ Usage to Maxem: 18 W",
+                "DZ Phase Watts to Maxem: L1=10 W, L2=20 W, L3=30 W",
             ],
         )
 
