@@ -40,11 +40,30 @@ def _get_setting(name, default=None):
     return value
 
 
+def _parse_bool_setting(name: str, default: str = "0") -> bool:
+    raw_value = str(_get_setting(name, default)).strip().lower()
+    return raw_value not in {"0", "false", "no", "off", ""}
+
+
+def _parse_optional_int_setting(name: str, default: str | None = None) -> int | None:
+    raw_value = _get_setting(name, default)
+    if raw_value in (None, ""):
+        return None
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Modbus softsplit proxy")
     parser.add_argument(
         "--dry-run-maxem-home",
         action="store_true",
+        default=_parse_bool_setting("DRY_RUN_MAXEM_HOME", "0"),
         help=(
             "Skip the RTU serial adapter and log the ABB instantaneous-power rewrite plan instead of writing "
             "to the RTU slave."
@@ -73,15 +92,14 @@ DOMOTICZ_USAGE_POLL_INTERVAL_SECONDS = float(
 DOMOTICZ_PHASE_L1_IDX = int(_get_setting("DOMOTICZ_PHASE_L1_IDX", "26"))
 DOMOTICZ_PHASE_L2_IDX = int(_get_setting("DOMOTICZ_PHASE_L2_IDX", "25"))
 DOMOTICZ_PHASE_L3_IDX = int(_get_setting("DOMOTICZ_PHASE_L3_IDX", "24"))
+DOMOTICZ_PHASE_EXPORT_L1_IDX = _parse_optional_int_setting("DOMOTICZ_PHASE_EXPORT_L1_IDX", "32")
+DOMOTICZ_PHASE_EXPORT_L2_IDX = _parse_optional_int_setting("DOMOTICZ_PHASE_EXPORT_L2_IDX", "31")
+DOMOTICZ_PHASE_EXPORT_L3_IDX = _parse_optional_int_setting("DOMOTICZ_PHASE_EXPORT_L3_IDX", "33")
+DOMOTICZ_USE_SIGNED_NET_POWER = _parse_bool_setting("DOMOTICZ_USE_SIGNED_NET_POWER", "1")
 LOG_LEVEL_NAME = str(_get_setting("LOG_LEVEL", "INFO")).strip().upper()
 LOG_LEVEL = getattr(logger, LOG_LEVEL_NAME, logger.INFO)
 STATUS_LOG_INTERVAL_SECONDS = max(float(_get_setting("STATUS_LOG_INTERVAL_SECONDS", "30.0")), 0.0)
-SUPPRESS_SHORT_RTU_REQUEST_LOGS = str(_get_setting("SUPPRESS_SHORT_RTU_REQUEST_LOGS", "1")).strip().lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
-}
+SUPPRESS_SHORT_RTU_REQUEST_LOGS = _parse_bool_setting("SUPPRESS_SHORT_RTU_REQUEST_LOGS", "1")
 
 logger.basicConfig(
     format='%(asctime)s modbus-gw: %(message)s',
@@ -199,13 +217,17 @@ def main():
             DOMOTICZ_GRID_IDX,
             timeout_seconds=DOMOTICZ_TIMEOUT_SECONDS,
         )
-        usage_cache = DomoticzUsageCache()
+        usage_cache = DomoticzUsageCache(use_signed_net_power=DOMOTICZ_USE_SIGNED_NET_POWER)
         usage_poller = DomoticzUsagePoller(
             domoticz_client,
             usage_cache,
             phase_l1_idx=DOMOTICZ_PHASE_L1_IDX,
             phase_l2_idx=DOMOTICZ_PHASE_L2_IDX,
             phase_l3_idx=DOMOTICZ_PHASE_L3_IDX,
+            phase_export_l1_idx=DOMOTICZ_PHASE_EXPORT_L1_IDX,
+            phase_export_l2_idx=DOMOTICZ_PHASE_EXPORT_L2_IDX,
+            phase_export_l3_idx=DOMOTICZ_PHASE_EXPORT_L3_IDX,
+            use_signed_net_power=DOMOTICZ_USE_SIGNED_NET_POWER,
             poll_interval_seconds=DOMOTICZ_USAGE_POLL_INTERVAL_SECONDS,
             logger=logger,
         )
@@ -283,12 +305,15 @@ def main():
                                 source_values=tuple(int(value) for value in acload_values),
                             )
                             preview_snapshot = usage_cache.snapshot() if usage_cache is not None else None
-                            usage_watts = preview_snapshot.grid_import_watts if preview_snapshot else 0.0
+                            usage_watts = preview_snapshot.rewrite_usage_watts if preview_snapshot else 0.0
+                            if usage_watts is None:
+                                usage_watts = 0.0
                             phase_usage_watts = preview_snapshot.phase_usage_watts if preview_snapshot else None
                             rewritten_values = rewrite_instantaneous_values(
                                 acload_values,
                                 usage_watts=usage_watts,
                                 phase_usage_watts=phase_usage_watts,
+                                allow_negative=DOMOTICZ_USE_SIGNED_NET_POWER,
                             )
                             preview_signature_value = preview_signature(
                                 capture,
@@ -318,12 +343,15 @@ def main():
                                     address_length=addr_len,
                                     source_values=tuple(int(value) for value in acload_values),
                                 )
-                                usage_watts = usage_snapshot.grid_import_watts if usage_snapshot else 0.0
+                                usage_watts = usage_snapshot.rewrite_usage_watts if usage_snapshot else 0.0
+                                if usage_watts is None:
+                                    usage_watts = 0.0
                                 phase_usage_watts = usage_snapshot.phase_usage_watts if usage_snapshot else None
                                 rewritten_values = rewrite_instantaneous_values(
                                     acload_values,
                                     usage_watts=usage_watts,
                                     phase_usage_watts=phase_usage_watts,
+                                    allow_negative=DOMOTICZ_USE_SIGNED_NET_POWER,
                                 )
                                 live_preview_signature = preview_signature(
                                     capture,

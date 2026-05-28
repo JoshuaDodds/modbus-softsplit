@@ -56,6 +56,9 @@ def build_dump_bundle(
     domoticz_reading: DomoticzReading | None,
     domoticz_url: str | None,
     domoticz_grid_idx: int | None,
+    domoticz_use_signed_net_power: bool = False,
+    domoticz_phase_import_watts: Sequence[float] | None = None,
+    domoticz_phase_export_watts: Sequence[float] | None = None,
     domoticz_phase_usage_watts: Sequence[float] | None = None,
 ) -> dict[str, object]:
     return {
@@ -72,7 +75,10 @@ def build_dump_bundle(
         "domoticz": {
             "url": domoticz_url,
             "grid_idx": domoticz_grid_idx,
+            "use_signed_net_power": bool(domoticz_use_signed_net_power),
             "reading": domoticz_reading.to_dict() if domoticz_reading else None,
+            "phase_import_watts": [float(value) for value in domoticz_phase_import_watts] if domoticz_phase_import_watts else None,
+            "phase_export_watts": [float(value) for value in domoticz_phase_export_watts] if domoticz_phase_export_watts else None,
             "phase_usage_watts": [float(value) for value in domoticz_phase_usage_watts] if domoticz_phase_usage_watts else None,
         },
         "captures": [register_capture_to_dict(capture) for capture in captures],
@@ -129,13 +135,20 @@ def build_replay_snapshot(
 ) -> DomoticzUsageSnapshot:
     reading = bundle_domoticz_reading(bundle)
     domoticz_block = bundle.get("domoticz", {})
+    use_signed_net_power = False
     phase_usage_watts = None
     if isinstance(domoticz_block, Mapping):
+        use_signed_net_power = bool(domoticz_block.get("use_signed_net_power", False))
         raw_phase_values = domoticz_block.get("phase_usage_watts")
         if isinstance(raw_phase_values, Sequence) and len(raw_phase_values) == 3:
             phase_usage_watts = tuple(float(value) for value in raw_phase_values)
     sequence = 1 if reading is not None else 0
-    return DomoticzUsageSnapshot(sequence=sequence, reading=reading, phase_usage_watts=phase_usage_watts)
+    return DomoticzUsageSnapshot(
+        sequence=sequence,
+        reading=reading,
+        phase_usage_watts=phase_usage_watts,
+        use_signed_net_power=use_signed_net_power,
+    )
 
 
 def build_replay_preview_lines(

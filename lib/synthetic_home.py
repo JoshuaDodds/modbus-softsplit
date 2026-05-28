@@ -454,14 +454,49 @@ class DomoticzClient:
     def url(self) -> str:
         return f"{self._base_url}/json.htm?type=devices&rid={self._grid_idx}"
 
+    @property
+    def grid_idx(self) -> int:
+        return int(self._grid_idx)
+
     def url_for_idx(self, rid: int) -> str:
         return f"{self._base_url}/json.htm?type=devices&rid={int(rid)}"
 
-    def fetch_payload(self, *, rid: int | None = None) -> Mapping[str, Any]:
+    @staticmethod
+    def _normalize_indices(rids: Sequence[int]) -> tuple[int, ...]:
+        normalized: list[int] = []
+        seen: set[int] = set()
+        for raw_rid in rids:
+            rid = int(raw_rid)
+            if rid <= 0 or rid in seen:
+                continue
+            normalized.append(rid)
+            seen.add(rid)
+
+        if not normalized:
+            raise ValueError("At least one positive Domoticz IDX is required")
+        return tuple(normalized)
+
+    def url_for_indices(self, rids: Sequence[int]) -> str:
+        normalized = self._normalize_indices(rids)
+        joined = ",".join(str(rid) for rid in normalized)
+        return f"{self._base_url}/json.htm?type=devices&rid={joined}"
+
+    def fetch_payload(
+        self,
+        *,
+        rid: int | None = None,
+        rids: Sequence[int] | None = None,
+    ) -> Mapping[str, Any]:
         if not self.enabled:
             raise RuntimeError("Domoticz client is disabled because no base URL was configured")
 
-        target_url = self.url if rid is None else self.url_for_idx(rid)
+        if rid is not None and rids is not None:
+            raise ValueError("Use either rid or rids, not both")
+
+        if rids is not None:
+            target_url = self.url_for_indices(rids)
+        else:
+            target_url = self.url if rid is None else self.url_for_idx(rid)
         request = Request(target_url, headers={"Accept": "application/json", "User-Agent": "modbus-softsplit/1.0"})
         with urlopen(request, timeout=self._timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -469,18 +504,56 @@ class DomoticzClient:
             raise TypeError("Domoticz payload must be a mapping")
         return payload
 
-    def fetch_data_watts(self, rid: int) -> float:
-        payload = self.fetch_payload(rid=rid)
-        candidate: Mapping[str, Any]
+    @staticmethod
+    def _result_candidates(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         result = payload.get("result")
         if isinstance(result, list) and result:
-            candidate = result[0]
-        else:
-            candidate = payload
+            return [candidate for candidate in result if isinstance(candidate, Mapping)]
+        if any(field in payload for field in ("idx", "Data", "Usage", "Counter")):
+            return [payload]
+        return []
 
-        if not isinstance(candidate, Mapping):
-            raise TypeError("Domoticz payload result must be a mapping")
+    def fetch_devices(self, rids: Sequence[int]) -> dict[int, Mapping[str, Any]]:
+        normalized = self._normalize_indices(rids)
+        payload = self.fetch_payload(rids=normalized)
+        candidates = self._result_candidates(payload)
+
+        devices: dict[int, Mapping[str, Any]] = {}
+        for candidate in candidates:
+            raw_idx = candidate.get("idx")
+            try:
+                idx = int(raw_idx)
+            except (TypeError, ValueError):
+                if len(normalized) == 1:
+                    idx = normalized[0]
+                else:
+                    continue
+            if idx in normalized and idx not in devices:
+                devices[idx] = candidate
+
+        if len(normalized) == 1 and not devices and candidates:
+            devices[normalized[0]] = candidates[0]
+
+        missing = [rid for rid in normalized if rid not in devices]
+        if missing:
+            missing_text = ", ".join(str(rid) for rid in missing)
+            raise KeyError(f"Domoticz payload missing requested IDX values: {missing_text}")
+        return devices
+
+    @staticmethod
+    def data_watts_from_device(candidate: Mapping[str, Any]) -> float:
         return _coerce_float(candidate, "Data")
+
+    @staticmethod
+    def fetch_reading_from_device(candidate: Mapping[str, Any]) -> DomoticzReading:
+        return DomoticzReading.from_payload({"result": [candidate]})
+
+    def fetch_data_watts_map(self, rids: Sequence[int]) -> dict[int, float]:
+        devices = self.fetch_devices(rids)
+        return {rid: self.data_watts_from_device(candidate) for rid, candidate in devices.items()}
+
+    def fetch_data_watts(self, rid: int) -> float:
+        return self.fetch_data_watts_map((rid,))[int(rid)]
 
     def fetch_reading(self) -> DomoticzReading:
         payload = self.fetch_payload()

@@ -1,6 +1,9 @@
 import unittest
+from unittest.mock import patch
 
 from lib.maxem_home_usage import (
+    DomoticzUsageCache,
+    DomoticzUsagePoller,
     DomoticzUsageSnapshot,
     INSTANTANEOUS_ACTIVE_POWER_L1_REGISTER_ADDRESS,
     INSTANTANEOUS_ACTIVE_POWER_L2_REGISTER_ADDRESS,
@@ -18,7 +21,7 @@ from lib.maxem_home_usage import (
     format_instantaneous_preview_lines,
     rewrite_instantaneous_values,
 )
-from lib.synthetic_home import DomoticzReading, RegisterCapture
+from lib.synthetic_home import DomoticzClient, DomoticzReading, RegisterCapture
 
 
 def _instantaneous_capture(source_watts: float) -> RegisterCapture:
@@ -65,6 +68,16 @@ class MaxemHomeUsageTests(unittest.TestCase):
 
         rewritten = rewrite_instantaneous_values(capture.source_values, usage_watts=-25.0)
         self.assertAlmostEqual(decode_signed_scaled_watts(rewritten), 0.0)
+
+    def test_instantaneous_register_supports_negative_rewrite_when_enabled(self) -> None:
+        capture = _instantaneous_capture(1234.5)
+
+        rewritten = rewrite_instantaneous_values(
+            capture.source_values,
+            usage_watts=-25.0,
+            allow_negative=True,
+        )
+        self.assertAlmostEqual(decode_signed_scaled_watts(rewritten), -25.0, places=2)
 
     def test_instantaneous_only_rewrites_total_field(self) -> None:
         capture = _instantaneous_capture(1234.5)
@@ -185,10 +198,110 @@ class MaxemHomeUsageTests(unittest.TestCase):
 
         self.assertIn("ABB instantaneous active power total", message)
         self.assertIn("0x5B14/0x5B15", message)
-        self.assertIn("Domoticz IDX 20 Usage", message)
-        self.assertIn("grid-import watt reading", message)
-        self.assertIn("clamping negatives to zero", message)
+        self.assertIn("DOMOTICZ_USE_SIGNED_NET_POWER=1", message)
+        self.assertIn("Usage-UsageDeliv", message)
+        self.assertIn("When disabled", message)
         self.assertIn("copied verbatim", message)
+
+    def test_domoticz_client_parses_multi_idx_payload(self) -> None:
+        client = DomoticzClient("http://example.invalid", 20)
+        payload = {
+            "status": "OK",
+            "result": [
+                {
+                    "idx": "20",
+                    "Counter": "64989.818",
+                    "CounterDeliv": "6787.095",
+                    "Usage": "87 Watt",
+                    "UsageDeliv": "15 Watt",
+                    "LastUpdate": "2026-05-28 10:00:00",
+                },
+                {"idx": "26", "Data": "1559.24 W"},
+                {"idx": "32", "Data": "120.00 W"},
+            ],
+        }
+
+        with patch.object(client, "fetch_payload", return_value=payload):
+            devices = client.fetch_devices((20, 26, 32))
+
+        self.assertEqual(sorted(devices.keys()), [20, 26, 32])
+        self.assertAlmostEqual(client.data_watts_from_device(devices[26]), 1559.24, places=2)
+        self.assertAlmostEqual(client.data_watts_from_device(devices[32]), 120.00, places=2)
+
+        reading = client.fetch_reading_from_device(devices[20])
+        self.assertAlmostEqual(reading.import_watts, 87.0)
+        self.assertAlmostEqual(reading.export_watts, 15.0)
+
+    def test_usage_poller_requests_one_batched_snapshot_per_cycle(self) -> None:
+        class _FakeBatchClient:
+            enabled = True
+            grid_idx = 20
+
+            def __init__(self) -> None:
+                import threading
+
+                self.calls: list[tuple[int, ...]] = []
+                self.called = threading.Event()
+
+            def fetch_devices(self, rids):
+                self.calls.append(tuple(int(value) for value in rids))
+                self.called.set()
+                return {
+                    20: {
+                        "idx": "20",
+                        "Counter": "64989.818",
+                        "CounterDeliv": "6787.095",
+                        "Usage": "87 Watt",
+                        "UsageDeliv": "15 Watt",
+                    },
+                    26: {"idx": "26", "Data": "1559.24 W"},
+                    25: {"idx": "25", "Data": "1284.30 W"},
+                    24: {"idx": "24", "Data": "1931.40 W"},
+                    32: {"idx": "32", "Data": "120.00 W"},
+                    31: {"idx": "31", "Data": "80.00 W"},
+                    33: {"idx": "33", "Data": "50.00 W"},
+                }
+
+            @staticmethod
+            def url_for_indices(rids):
+                return "http://example.invalid/json.htm?type=devices&rid=" + ",".join(str(int(value)) for value in rids)
+
+            @staticmethod
+            def data_watts_from_device(candidate):
+                return float(str(candidate["Data"]).split()[0])
+
+            @staticmethod
+            def fetch_reading_from_device(candidate):
+                return DomoticzReading.from_payload({"result": [candidate]})
+
+        fake_client = _FakeBatchClient()
+        cache = DomoticzUsageCache(use_signed_net_power=True)
+        poller = DomoticzUsagePoller(
+            fake_client,  # type: ignore[arg-type]
+            cache,
+            phase_l1_idx=26,
+            phase_l2_idx=25,
+            phase_l3_idx=24,
+            phase_export_l1_idx=32,
+            phase_export_l2_idx=31,
+            phase_export_l3_idx=33,
+            use_signed_net_power=True,
+            poll_interval_seconds=0.1,
+        )
+
+        poller.start()
+        self.assertTrue(fake_client.called.wait(timeout=1.0))
+        poller.stop()
+        poller.join(timeout=1.0)
+
+        self.assertGreaterEqual(len(fake_client.calls), 1)
+        self.assertEqual(fake_client.calls[0], (20, 26, 25, 24, 32, 31, 33))
+        snapshot = cache.snapshot()
+        self.assertAlmostEqual(snapshot.rewrite_usage_watts or 0.0, 72.0, places=2)
+        self.assertIsNotNone(snapshot.phase_usage_watts)
+        self.assertAlmostEqual(snapshot.phase_usage_watts[0], 1439.24, places=2)
+        self.assertAlmostEqual(snapshot.phase_usage_watts[1], 1204.30, places=2)
+        self.assertAlmostEqual(snapshot.phase_usage_watts[2], 1881.40, places=2)
 
 
 if __name__ == "__main__":

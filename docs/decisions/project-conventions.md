@@ -6,16 +6,20 @@ operator-facing assumptions for `modbus-softsplit`.
 ## Active Rewrite Path
 
 - The Maxem rewrite path uses Domoticz device `IDX 20` `Usage` as the live
-  grid-import watt reading.
-- The Maxem rewrite path also uses Domoticz per-phase `result.Data` readings
-  from `rid=26` (L1), `rid=25` (L2), and `rid=24` (L3).
+  grid usage signal.
+- With `DOMOTICZ_USE_SIGNED_NET_POWER=1` (default), rewrite total watts are
+  computed as `Usage - UsageDeliv` from `IDX 20`.
+- With `DOMOTICZ_USE_SIGNED_NET_POWER=0`, rewrite total watts use non-negative
+  `Usage` import-only behavior.
+- The Maxem rewrite path also uses Domoticz per-phase `result.Data` readings:
+  import from `rid=26` (L1), `rid=25` (L2), and `rid=24` (L3), plus export
+  from `rid=32` (L1), `rid=31` (L2), and `rid=33` (L3) when signed-net mode is enabled.
 - House load is ignored for the Maxem rewrite path.
-- Negative values are clamped to `0` before encoding.
 - The ABB target register block is `instantaneous_values`.
 - Rewritten words in that block are:
-  - `0x5B14/0x5B15` active power total from Domoticz `IDX 20` Usage.
+  - `0x5B14/0x5B15` active power total from Domoticz grid watts.
   - `0x5B16/0x5B17`, `0x5B18/0x5B19`, `0x5B1A/0x5B1B` active power L1/L2/L3
-    from Domoticz phase `rid 26/25/24`.
+    from Domoticz phase watts.
 - All other words in `instantaneous_values` and all other Maxem register blocks
   are mirrored unchanged from the ABB source.
 - Preview logs should stay short and verifiable:
@@ -47,8 +51,15 @@ operator-facing assumptions for `modbus-softsplit`.
 ## Runtime Guardrails
 
 - `--dry-run-maxem-home` is opt-in and must not open the RTU serial adapter.
+- `DRY_RUN_MAXEM_HOME=1` in `.env` is the default-mode toggle equivalent to
+  starting with `--dry-run-maxem-home`.
 - `--trace-instantaneous-payload` is opt-in and intended for diagnostics only.
 - Domoticz polling must stay off the RTU serving path and remain non-blocking.
+- Domoticz polling should batch all required IDX values into one HTTP request
+  per poll cycle to minimize overhead and jitter.
+- Batch-request visibility should remain debug-only (`Domoticz batch request:
+  ...`) so operators can verify URL/IDX composition without adding info-level
+  log noise.
 - The serving loop should remain timing-safe for the RTU client.
 - High-volume loop status logs should be periodic instead of per-cycle to avoid
   unnecessary log I/O overhead (`STATUS_LOG_INTERVAL_SECONDS`, default `30`).

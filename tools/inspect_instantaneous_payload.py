@@ -67,7 +67,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     replay_snapshot = build_replay_snapshot(bundle)
     preview_snapshot = replay_snapshot
-    usage_watts = preview_snapshot.grid_import_watts
+    usage_watts = preview_snapshot.rewrite_usage_watts
     phase_usage_watts = preview_snapshot.phase_usage_watts
     if args.usage_watts is not None:
         usage_watts = args.usage_watts
@@ -87,6 +87,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 last_update=None,
             ),
             phase_usage_watts=phase_usage_watts,
+            use_signed_net_power=replay_snapshot.use_signed_net_power,
         )
     if usage_watts is None:
         usage_watts = 0.0
@@ -95,6 +96,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         capture.source_values,
         usage_watts=usage_watts,
         phase_usage_watts=phase_usage_watts,
+        allow_negative=preview_snapshot.use_signed_net_power,
     )
 
     print(describe_instantaneous_preview_basis())

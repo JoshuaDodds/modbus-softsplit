@@ -43,24 +43,23 @@ your specific situation.
   serial adapter unopened and logs the instantaneous-power rewrite it would apply to `instantaneous_values` instead of
   writing values into the RTU slave. This keeps the RTU serving path quiet while we inspect the intended rewrite
   behavior.
+- You can also set `DRY_RUN_MAXEM_HOME=1` in `.env` to make dry-run the default without changing service/unit args.
 - In dry-run mode the Maxem preview is intentionally short and easy to compare against dashboards:
   `ABB source: X W`, `DZ Usage to Maxem: Y W`, and `DZ Phase Watts to Maxem: L1=..., L2=..., L3=...`.
   These lines are emitted at `DEBUG` level (set `LOG_LEVEL=DEBUG` when you want them).
-- The corrected v1 story is to source Domoticz IDX 20 `Usage` as the live grid-import watt reading, clamp any negative
-  net value to zero, and encode the result into the ABB-compatible instantaneous active-power registers:
-  `0x5B14/0x5B15` (total), `0x5B16/0x5B17` (L1), `0x5B18/0x5B19` (L2), and `0x5B1A/0x5B1B` (L3). Phase watt inputs come from Domoticz
-  `result.Data` at `rid=26` (L1), `rid=25` (L2), and `rid=24` (L3). House load is not forwarded to Maxem.
-  The earlier cumulative-counter preview was a prototype interpretation and is deprecated.
+- The corrected v1 story rewrites only ABB `instantaneous_values` active-power fields while mirroring all other words
+  verbatim. By default (`DOMOTICZ_USE_SIGNED_NET_POWER=1`) we encode signed net watts into ABB-compatible registers:
+  total uses `IDX 20 Usage-UsageDeliv`, and phases use per-phase import-export from `rid=26/25/24` minus `rid=32/31/33`
+  into `0x5B14/0x5B15` (total), `0x5B16/0x5B17` (L1), `0x5B18/0x5B19` (L2), and `0x5B1A/0x5B1B` (L3).
+  House load is not forwarded to Maxem. The earlier cumulative-counter preview was a prototype interpretation and is deprecated.
 - The dry-run logger prints one semantic line before the preview values so it is obvious that the preview is the
   ABB instantaneous power register being rewritten from Domoticz `Usage`.
 - Register bundle captures and replay previews live under `tools/`. The dump helper defaults to `instantaneous_values`
   only, and the replay helper prints the same preview lines without touching the RTU adapter.
 - Preview semantics are simple:
   - `ABB source` is the decoded instantaneous active-power total from ABB.
-  - `DZ Usage to Maxem` is the Domoticz IDX 20 grid-import watt reading after clamping negatives to zero and encoding
-    it back into the ABB register format.
-  - `DZ Phase Watts to Maxem` are the Domoticz per-phase watt readings (`rid 26/25/24`) encoded into
-    `active_power_l1/l2/l3`.
+  - `DZ Usage to Maxem` is the rewrite total watts (signed net by default, import-only when `DOMOTICZ_USE_SIGNED_NET_POWER=0`).
+  - `DZ Phase Watts to Maxem` are per-phase rewrite watts (import-export by default, import-only when signed-net mode is disabled).
 - Core application modules now live under `lib/` so the repo root stays focused on the entrypoint, tools,
   and docs.
 
@@ -80,6 +79,10 @@ your specific situation.
   source vs rewritten values plus the exact word addresses that changed.
 - `python3 main.py --trace-instantaneous-payload` enables the same field-level diff in live runtime logs so we can
   verify exactly what is being written without changing default behavior.
+- Domoticz polling now performs one batched `json.htm?type=devices&rid=...` request per cycle for grid + phase values
+  to reduce HTTP overhead and timing jitter.
+- At `DEBUG` level the poller logs the exact batched Domoticz URL each cycle (`Domoticz batch request: ...`) so you can
+  verify the single-request behavior in both live and dry-run modes.
 - `LOG_LEVEL` defaults to `INFO`; set `LOG_LEVEL=DEBUG` to show preview lines (`ABB source` / `DZ ... to Maxem`).
 - The main loop now handles `Ctrl-C` cleanly in one interrupt and stops the poller and servers without a traceback.
 - Canonical project-specific runtime rules and durable decisions live in

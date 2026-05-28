@@ -34,6 +34,8 @@ Expected:
   - `0x5B14, 0x5B15` (total power)
   - `0x5B16..0x5B1B` (phase L1/L2/L3 power)
 - Voltage and current fields remain unchanged unless source changed.
+- In signed-net mode (`DOMOTICZ_USE_SIGNED_NET_POWER=1`), total and phase
+  rewrite watts may be negative (import-export semantics).
 
 ## Step 2: Live Runtime with Trace
 
@@ -50,6 +52,8 @@ Watch for:
   - `DZ Usage to Maxem: ...`
   - `DZ Phase Watts to Maxem: ...`
 - Trace lines indicating only intended words changed in `instantaneous_values`.
+- Optional debug line `Domoticz usage snapshot updated...` should show one
+  coherent grid+phase snapshot per poll cycle (single batched Domoticz request).
 
 ## Step 3: UI Cross-Check
 
