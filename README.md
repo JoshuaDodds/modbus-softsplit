@@ -49,11 +49,13 @@ your specific situation.
   These lines are emitted at `DEBUG` level (set `LOG_LEVEL=DEBUG` when you want them).
 - The active rewrite story now reads directly from Victron CerboGX MQTT (read-only) and rewrites selected words in
   ABB `instantaneous_values` while mirroring all other words verbatim.
-  - `active_power_total/l1/l2/l3` (`0x5B14..0x5B1B`) are sourced from `Ac/ActiveIn` phase watts.
+  - `active_power_total` (`0x5B14/0x5B15`) is sourced from `Ac/ActiveIn` total watts.
+  - `active_power_l1/l2/l3` (`0x5B16..0x5B1B`) follow `CERBO_PHASE_POWER_SOURCE`.
   - `current_l1/l2/l3/n` (`0x5B0C..0x5B13`) are sourced from `Ac/Out` phase currents.
   - `Ac/ActiveIn` values may be positive or negative; `Ac/Out` currents are clamped to non-negative values.
   - `CERBO_PHASE_POWER_SOURCE` can pivot phase-power behavior without code edits:
-    - `activein` keeps signed grid semantics from `Ac/ActiveIn`.
+    - `activein` uses Cerbo `Ac/ActiveIn` per-phase watts.
+      When `CERBO_FORCE_NONNEGATIVE_PHASE_POWER=1`, exports are first netted against imports across phases, then clamped to `>=0`.
     - `acout` derives phase watts from ABB phase voltages and Cerbo `Ac/Out` phase currents.
     - `abb` leaves phase-power words unchanged from ABB passthrough.
   - `CERBO_COHERENT_PHASE_FRAMES=1` publishes snapshots only after complete 3-phase updates for both

@@ -19,7 +19,9 @@ operator-facing assumptions for `modbus-softsplit`.
   - `activein` -> phase power from Cerbo `Ac/ActiveIn` (signed).
   - `acout` -> phase power derived from ABB phase voltages and Cerbo `Ac/Out` currents.
   - `abb` -> phase power passthrough from ABB (no rewrite on phase words).
-- `CERBO_FORCE_NONNEGATIVE_PHASE_POWER=1` clamps rewritten phase-power values to `>=0`.
+- `CERBO_FORCE_NONNEGATIVE_PHASE_POWER=1` enforces non-negative phase-power writes:
+  - in `activein` mode, export is netted against import across phases first, then clamped to `>=0`.
+  - in other modes, each phase is clamped independently to `>=0`.
 - Current rewrite source:
   - `Ac/Out/L1|L2|L3/I` -> phase current words.
   - `Ac/Out/N/I` -> neutral current word when present.
@@ -32,8 +34,9 @@ operator-facing assumptions for `modbus-softsplit`.
 - Rewritten words in that block are:
   - `0x5B0C/0x5B0D`, `0x5B0E/0x5B0F`, `0x5B10/0x5B11`, `0x5B12/0x5B13`
     current L1/L2/L3/N from Cerbo `Ac/Out`.
-  - `0x5B14/0x5B15`, `0x5B16/0x5B17`, `0x5B18/0x5B19`, `0x5B1A/0x5B1B`
-    active power total/L1/L2/L3 from Cerbo `Ac/ActiveIn`.
+  - `0x5B14/0x5B15` active power total from Cerbo `Ac/ActiveIn`.
+  - `0x5B16/0x5B17`, `0x5B18/0x5B19`, `0x5B1A/0x5B1B`
+    active power per-phase from `CERBO_PHASE_POWER_SOURCE`.
 - All other words in `instantaneous_values` and all other Maxem register blocks
   are mirrored unchanged from the ABB source.
 - Preview logs should stay short and verifiable:

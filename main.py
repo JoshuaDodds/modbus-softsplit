@@ -22,6 +22,7 @@ from lib.maxem_home_usage import (
     derive_phase_watts_from_currents,
     format_instantaneous_diff_lines,
     format_instantaneous_preview_lines,
+    net_signed_phase_watts_to_nonnegative_import,
     preview_signature,
     rewrite_instantaneous_values,
 )
@@ -251,6 +252,12 @@ def _resolve_phase_usage_watts_for_rewrite(
 
     if phase_usage_watts is None:
         return None
+    if CERBO_FORCE_NONNEGATIVE_PHASE_POWER and CERBO_PHASE_POWER_SOURCE == "activein":
+        # In activein mode we synthesize import-only phase words by netting
+        # export against import across phases first, then clamping to >= 0.
+        return net_signed_phase_watts_to_nonnegative_import(
+            tuple(float(value) for value in phase_usage_watts)
+        )
     if CERBO_FORCE_NONNEGATIVE_PHASE_POWER:
         return tuple(max(float(value), 0.0) for value in phase_usage_watts)
     return tuple(float(value) for value in phase_usage_watts)

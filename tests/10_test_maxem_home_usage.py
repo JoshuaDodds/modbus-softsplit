@@ -25,6 +25,7 @@ from lib.maxem_home_usage import (
     encode_signed_scaled_watts,
     format_instantaneous_diff_lines,
     format_instantaneous_preview_lines,
+    net_signed_phase_watts_to_nonnegative_import,
     rewrite_instantaneous_values,
 )
 from lib.synthetic_home import DomoticzClient, DomoticzReading, RegisterCapture
@@ -229,6 +230,23 @@ class MaxemHomeUsageTests(unittest.TestCase):
         self.assertAlmostEqual(derived[0], 230.0, places=2)
         self.assertAlmostEqual(derived[1], 460.0, places=2)
         self.assertAlmostEqual(derived[2], 690.0, places=2)
+
+    def test_net_signed_phase_watts_to_nonnegative_import_offsets_exports(self) -> None:
+        netted = net_signed_phase_watts_to_nonnegative_import((-350.0, 350.0, 0.0))
+
+        self.assertIsNotNone(netted)
+        self.assertAlmostEqual(netted[0], 0.0, places=6)
+        self.assertAlmostEqual(netted[1], 0.0, places=6)
+        self.assertAlmostEqual(netted[2], 0.0, places=6)
+
+    def test_net_signed_phase_watts_to_nonnegative_import_scales_positive_phases(self) -> None:
+        netted = net_signed_phase_watts_to_nonnegative_import((-250.0, 270.0, 50.0))
+
+        self.assertIsNotNone(netted)
+        self.assertAlmostEqual(sum(netted), 70.0, places=6)
+        self.assertGreaterEqual(netted[0], 0.0)
+        self.assertGreaterEqual(netted[1], 0.0)
+        self.assertGreaterEqual(netted[2], 0.0)
 
     def test_decode_instantaneous_fields_treats_invalid_sentinel_words_as_none(self) -> None:
         source_values = [0] * INSTANTANEOUS_VALUES_REGISTER_LENGTH

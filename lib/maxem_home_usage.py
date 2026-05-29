@@ -656,6 +656,34 @@ def derive_phase_watts_from_currents(
     return (derived_watts[0], derived_watts[1], derived_watts[2])
 
 
+def net_signed_phase_watts_to_nonnegative_import(
+    phase_watts: tuple[float, float, float] | None,
+) -> tuple[float, float, float] | None:
+    if phase_watts is None:
+        return None
+
+    phase_values = tuple(float(value) for value in phase_watts)
+    phase_import = [max(value, 0.0) for value in phase_values]
+    total_import = sum(phase_import)
+    if total_import <= 0.0:
+        return (0.0, 0.0, 0.0)
+
+    total_export = -sum(min(value, 0.0) for value in phase_values)
+    if total_export <= 0.0:
+        return (phase_import[0], phase_import[1], phase_import[2])
+
+    net_import = max(total_import - total_export, 0.0)
+    if net_import <= 0.0:
+        return (0.0, 0.0, 0.0)
+
+    scale = net_import / total_import
+    return (
+        phase_import[0] * scale,
+        phase_import[1] * scale,
+        phase_import[2] * scale,
+    )
+
+
 def encode_signed_scaled_watts(
     value_watts: float,
     *,
