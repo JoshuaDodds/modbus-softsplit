@@ -84,6 +84,11 @@ MOSQUITTO_IP = _get_setting("MOSQUITTO_IP", "mosquitto.hs.mfis.net")
 MOSQUITTO_PORT = int(_get_setting("MOSQUITTO_PORT", "1883"))
 CERBO_AC_OUT_TOPIC = _get_setting("CERBO_AC_OUT_TOPIC", "N/48e7da878d35/vebus/276/Ac/Out")
 CERBO_AC_ACTIVEIN_TOPIC = _get_setting("CERBO_AC_ACTIVEIN_TOPIC", "N/48e7da878d35/vebus/276/Ac/ActiveIn")
+CERBO_MQTT_PROTOCOL_DEBUG = _parse_bool_setting("CERBO_MQTT_PROTOCOL_DEBUG", "0")
+CERBO_MQTT_SNAPSHOT_DEBUG_INTERVAL_SECONDS = max(
+    float(_get_setting("CERBO_MQTT_SNAPSHOT_DEBUG_INTERVAL_SECONDS", "0.0")),
+    0.0,
+)
 LOG_LEVEL_NAME = str(_get_setting("LOG_LEVEL", "INFO")).strip().upper()
 LOG_LEVEL = getattr(logger, LOG_LEVEL_NAME, logger.INFO)
 STATUS_LOG_INTERVAL_SECONDS = max(float(_get_setting("STATUS_LOG_INTERVAL_SECONDS", "30.0")), 0.0)
@@ -171,7 +176,8 @@ def _stop_runtime(
 def _log_source_effective_config() -> None:
     logger.info(
         (
-            "Cerbo MQTT source: host=%s(%s) port=%s(%s) ac_out_topic=%s(%s) ac_activein_topic=%s(%s)"
+            "Cerbo MQTT source: host=%s(%s) port=%s(%s) ac_out_topic=%s(%s) ac_activein_topic=%s(%s) "
+            "protocol_debug=%s(%s) snapshot_debug_interval_seconds=%.2f(%s)"
         ),
         MOSQUITTO_IP,
         _get_setting_source("MOSQUITTO_IP"),
@@ -181,6 +187,10 @@ def _log_source_effective_config() -> None:
         _get_setting_source("CERBO_AC_OUT_TOPIC"),
         CERBO_AC_ACTIVEIN_TOPIC,
         _get_setting_source("CERBO_AC_ACTIVEIN_TOPIC"),
+        int(CERBO_MQTT_PROTOCOL_DEBUG),
+        _get_setting_source("CERBO_MQTT_PROTOCOL_DEBUG"),
+        CERBO_MQTT_SNAPSHOT_DEBUG_INTERVAL_SECONDS,
+        _get_setting_source("CERBO_MQTT_SNAPSHOT_DEBUG_INTERVAL_SECONDS"),
     )
     if CERBO_AC_OUT_TOPIC == CERBO_AC_ACTIVEIN_TOPIC:
         logger.warning(
@@ -229,6 +239,8 @@ def main():
             ac_out_topic_base=CERBO_AC_OUT_TOPIC,
             ac_active_in_topic_base=CERBO_AC_ACTIVEIN_TOPIC,
             cache=rewrite_cache,
+            protocol_debug=CERBO_MQTT_PROTOCOL_DEBUG,
+            snapshot_debug_interval_seconds=CERBO_MQTT_SNAPSHOT_DEBUG_INTERVAL_SECONDS,
             logger=logger,
         )
         rewrite_poller.start()

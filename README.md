@@ -86,6 +86,10 @@ your specific situation.
   - `CERBO_AC_OUT_TOPIC` (default `N/48e7da878d35/vebus/276/Ac/Out`)
   - `CERBO_AC_ACTIVEIN_TOPIC` (default `N/48e7da878d35/vebus/276/Ac/ActiveIn`)
 - At `DEBUG` level the runtime logs snapshot updates from MQTT and preview lines (`ABB source` / `Cerbo ... to Maxem`).
+- To keep DEBUG readable by default:
+  - `CERBO_MQTT_PROTOCOL_DEBUG=0` suppresses raw paho wire logs (`Sending CONNECT`, `Received PUBLISH`, etc).
+  - `CERBO_MQTT_SNAPSHOT_DEBUG_INTERVAL_SECONDS=0` suppresses per-message snapshot debug spam.
+  - Set `CERBO_MQTT_PROTOCOL_DEBUG=1` and/or `CERBO_MQTT_SNAPSHOT_DEBUG_INTERVAL_SECONDS=<seconds>` only for deep MQTT troubleshooting.
 - Startup logs print effective Cerbo source settings and where values came from (`env`, `.env`, or defaults).
 - The main loop now handles `Ctrl-C` cleanly in one interrupt and stops the poller and servers without a traceback.
 - Canonical project-specific runtime rules and durable decisions live in

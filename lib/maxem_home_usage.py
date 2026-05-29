@@ -345,6 +345,8 @@ class CerboMqttPoller(threading.Thread):
         ac_out_topic_base: str,
         ac_active_in_topic_base: str,
         cache: CerboMqttCache,
+        protocol_debug: bool = False,
+        snapshot_debug_interval_seconds: float = 0.0,
         logger: logging.Logger | None = None,
     ) -> None:
         super().__init__(name="cerbo-mqtt-poller", daemon=True)
@@ -355,11 +357,15 @@ class CerboMqttPoller(threading.Thread):
         self._cache = cache
         self._logger = logger or logging.getLogger(__name__)
         self._stop_event = threading.Event()
+        self._protocol_debug = bool(protocol_debug)
+        self._snapshot_debug_interval_seconds = max(float(snapshot_debug_interval_seconds), 0.0)
+        self._next_snapshot_log_time = 0.0
         self._phase_in_watts: list[float | None] = [None, None, None]
         self._phase_out_currents: list[float | None] = [None, None, None]
         self._current_n: float | None = None
         self._client = mqtt.Client(client_id=f"modbus-softsplit-{int(time.time())}", protocol=mqtt.MQTTv311)
-        self._client.enable_logger(self._logger)
+        if self._protocol_debug:
+            self._client.enable_logger(self._logger)
         self._client.on_connect = self._on_connect
         self._client.on_message = self._on_message
         self._client.on_disconnect = self._on_disconnect
@@ -445,6 +451,14 @@ class CerboMqttPoller(threading.Thread):
             ),
             ac_out_current_n=self._current_n,
         )
+        if self._snapshot_debug_interval_seconds <= 0.0:
+            return
+
+        now = time.monotonic()
+        if now < self._next_snapshot_log_time:
+            return
+        self._next_snapshot_log_time = now + self._snapshot_debug_interval_seconds
+
         current_n_text = "n/a" if snapshot.current_n_amps is None else f"{snapshot.current_n_amps:.2f}"
         self._logger.debug(
             (

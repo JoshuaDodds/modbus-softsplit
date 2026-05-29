@@ -66,6 +66,8 @@ operator-facing assumptions for `modbus-softsplit`.
   remain timing-safe.
 - Startup should log effective Cerbo MQTT source settings and source precedence
   (`env` vs `.env` vs defaults).
+- `CERBO_MQTT_PROTOCOL_DEBUG=0` should remain default so DEBUG logs stay operator-readable; enable only during MQTT wire troubleshooting.
+- `CERBO_MQTT_SNAPSHOT_DEBUG_INTERVAL_SECONDS=0` should remain default to prevent per-message snapshot log flooding.
 - The serving loop should remain timing-safe for the RTU client.
 - High-volume loop status logs should be periodic instead of per-cycle to avoid
   unnecessary log I/O overhead (`STATUS_LOG_INTERVAL_SECONDS`, default `30`).
