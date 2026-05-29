@@ -11,11 +11,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from lib.maxem_home_usage import (
+    CerboMqttSnapshot,
     INSTANTANEOUS_VALUES_REGISTER_NAME,
     describe_instantaneous_preview_basis,
     format_instantaneous_diff_lines,
     format_instantaneous_preview_lines,
-    DomoticzUsageSnapshot,
     rewrite_instantaneous_values,
 )
 from lib.register_capture_tools import (
@@ -23,14 +23,13 @@ from lib.register_capture_tools import (
     bundle_captures,
     load_dump_bundle,
 )
-from lib.synthetic_home import DomoticzReading
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Inspect ABB instantaneous_values payload and show exactly what words/fields change after the "
-            "Domoticz Usage rewrite."
+            "rewrite plan is applied."
         )
     )
     parser.add_argument(
@@ -42,11 +41,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--usage-watts",
         type=float,
         default=None,
-        help="Override Usage watts instead of using domoticz.reading.import_watts from the bundle.",
+        help="Override rewrite total watts from the bundle snapshot.",
     )
     parser.add_argument("--phase-l1-watts", type=float, default=None, help="Override phase L1 watts.")
     parser.add_argument("--phase-l2-watts", type=float, default=None, help="Override phase L2 watts.")
     parser.add_argument("--phase-l3-watts", type=float, default=None, help="Override phase L3 watts.")
+    parser.add_argument("--phase-l1-amps", type=float, default=None, help="Override phase L1 current amps.")
+    parser.add_argument("--phase-l2-amps", type=float, default=None, help="Override phase L2 current amps.")
+    parser.add_argument("--phase-l3-amps", type=float, default=None, help="Override phase L3 current amps.")
+    parser.add_argument("--neutral-amps", type=float, default=None, help="Override neutral current amps.")
     return parser
 
 
@@ -67,38 +70,58 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     replay_snapshot = build_replay_snapshot(bundle)
     preview_snapshot = replay_snapshot
-    usage_watts = preview_snapshot.rewrite_usage_watts
-    phase_usage_watts = preview_snapshot.phase_usage_watts
+    usage_watts = getattr(preview_snapshot, "rewrite_usage_watts", None)
+    phase_usage_watts = getattr(preview_snapshot, "phase_usage_watts", None)
+    phase_current_amps = getattr(preview_snapshot, "phase_current_amps", None)
+    current_n_amps = getattr(preview_snapshot, "current_n_amps", None)
+    allow_negative = bool(getattr(preview_snapshot, "use_signed_net_power", True))
+    allow_negative_phase = bool(getattr(preview_snapshot, "use_signed_net_phase_power", True))
+
     if args.usage_watts is not None:
         usage_watts = args.usage_watts
+
     override_phase_values = [args.phase_l1_watts, args.phase_l2_watts, args.phase_l3_watts]
     if any(value is not None for value in override_phase_values):
         if any(value is None for value in override_phase_values):
             raise ValueError("Provide all three phase overrides together: --phase-l1-watts --phase-l2-watts --phase-l3-watts")
         phase_usage_watts = (float(args.phase_l1_watts), float(args.phase_l2_watts), float(args.phase_l3_watts))
-    if args.usage_watts is not None or any(value is not None for value in override_phase_values):
-        preview_snapshot = DomoticzUsageSnapshot(
-            sequence=replay_snapshot.sequence + 1,
-            reading=DomoticzReading(
-                import_kwh=0.0,
-                export_kwh=0.0,
-                import_watts=usage_watts if usage_watts is not None else 0.0,
-                export_watts=0.0,
-                last_update=None,
-            ),
-            phase_usage_watts=phase_usage_watts,
-            use_signed_net_power=replay_snapshot.use_signed_net_power,
-            use_signed_net_phase_power=replay_snapshot.use_signed_net_phase_power,
-        )
+
+    override_phase_current_values = [args.phase_l1_amps, args.phase_l2_amps, args.phase_l3_amps]
+    if any(value is not None for value in override_phase_current_values):
+        if any(value is None for value in override_phase_current_values):
+            raise ValueError("Provide all three current overrides together: --phase-l1-amps --phase-l2-amps --phase-l3-amps")
+        phase_current_amps = (float(args.phase_l1_amps), float(args.phase_l2_amps), float(args.phase_l3_amps))
+
+    if args.neutral_amps is not None:
+        current_n_amps = float(args.neutral_amps)
+
     if usage_watts is None:
-        usage_watts = 0.0
+        usage_watts = float(sum(phase_usage_watts)) if phase_usage_watts is not None else 0.0
+
+    if (
+        args.usage_watts is not None
+        or any(value is not None for value in override_phase_values)
+        or any(value is not None for value in override_phase_current_values)
+        or args.neutral_amps is not None
+    ):
+        preview_snapshot = CerboMqttSnapshot(
+            sequence=int(getattr(replay_snapshot, "sequence", 0)) + 1,
+            ac_in_phase_watts=phase_usage_watts,
+            ac_in_total_watts=float(usage_watts),
+            ac_out_phase_currents=phase_current_amps,
+            ac_out_current_n=current_n_amps,
+        )
+        allow_negative = True
+        allow_negative_phase = True
 
     rewritten_values = rewrite_instantaneous_values(
         capture.source_values,
         usage_watts=usage_watts,
         phase_usage_watts=phase_usage_watts,
-        allow_negative=preview_snapshot.use_signed_net_power,
-        allow_negative_phase=preview_snapshot.use_signed_net_phase_power,
+        phase_current_amps=phase_current_amps,
+        current_n_amps=current_n_amps,
+        allow_negative=allow_negative,
+        allow_negative_phase=allow_negative_phase,
     )
 
     print(describe_instantaneous_preview_basis())
@@ -111,6 +134,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             "Override Phase Watts applied: "
             f"L1={args.phase_l1_watts:.2f} W, L2={args.phase_l2_watts:.2f} W, L3={args.phase_l3_watts:.2f} W"
         )
+    if any(value is not None for value in override_phase_current_values):
+        print(
+            "Override Phase Currents applied: "
+            f"L1={args.phase_l1_amps:.2f} A, L2={args.phase_l2_amps:.2f} A, L3={args.phase_l3_amps:.2f} A"
+        )
+    if args.neutral_amps is not None:
+        print(f"Override Neutral Current applied: N={args.neutral_amps:.2f} A")
 
     print("---- instantaneous field diff ----")
     for line in format_instantaneous_diff_lines(capture.source_values, rewritten_values):

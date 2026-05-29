@@ -14,8 +14,8 @@ import serial
 
 from lib.register_maps import MAXEM_HOLDING_REGISTERS, VICTRON_HOLDING_REGISTERS
 from lib.maxem_home_usage import (
-    DomoticzUsageCache,
-    DomoticzUsagePoller,
+    CerboMqttCache,
+    CerboMqttPoller,
     INSTANTANEOUS_VALUES_REGISTER_NAME,
     describe_instantaneous_preview_basis,
     format_instantaneous_diff_lines,
@@ -23,7 +23,7 @@ from lib.maxem_home_usage import (
     preview_signature,
     rewrite_instantaneous_values,
 )
-from lib.synthetic_home import DomoticzClient, RegisterCapture
+from lib.synthetic_home import RegisterCapture
 
 _DOTENV = dotenv_values(".env")
 
@@ -55,19 +55,6 @@ def _parse_bool_setting(name: str, default: str = "0") -> bool:
     return raw_value not in {"0", "false", "no", "off", ""}
 
 
-def _parse_optional_int_setting(name: str, default: str | None = None) -> int | None:
-    raw_value = _get_setting(name, default)
-    if raw_value in (None, ""):
-        return None
-    try:
-        parsed = int(raw_value)
-    except (TypeError, ValueError):
-        return None
-    if parsed <= 0:
-        return None
-    return parsed
-
-
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Modbus softsplit proxy")
     parser.add_argument(
@@ -93,20 +80,10 @@ def _parse_args(argv=None):
 SERIAL_PORT = _get_setting("SERIAL_PORT", "/dev/ttyXRUSB0")
 MODBUS_TCP_GW = _get_setting("MODBUS_TCP_GW_IP", "192.168.1.140")
 MODBUS_TCP_GW_PORT = int(_get_setting("MODBUS_TCP_GW_PORT", "8899"))
-DOMOTICZ_URL = _get_setting("DOMOTICZ_URL", "http://dz-insecure.hs.mfis.net")
-DOMOTICZ_GRID_IDX = int(_get_setting("DOMOTICZ_GRID_IDX", "20"))
-DOMOTICZ_TIMEOUT_SECONDS = float(_get_setting("DOMOTICZ_TIMEOUT_SECONDS", "1.0"))
-DOMOTICZ_USAGE_POLL_INTERVAL_SECONDS = float(
-    _get_setting("DOMOTICZ_USAGE_POLL_INTERVAL_SECONDS", "5.0")
-)
-DOMOTICZ_PHASE_L1_IDX = int(_get_setting("DOMOTICZ_PHASE_L1_IDX", "26"))
-DOMOTICZ_PHASE_L2_IDX = int(_get_setting("DOMOTICZ_PHASE_L2_IDX", "24"))
-DOMOTICZ_PHASE_L3_IDX = int(_get_setting("DOMOTICZ_PHASE_L3_IDX", "25"))
-DOMOTICZ_PHASE_EXPORT_L1_IDX = _parse_optional_int_setting("DOMOTICZ_PHASE_EXPORT_L1_IDX", "32")
-DOMOTICZ_PHASE_EXPORT_L2_IDX = _parse_optional_int_setting("DOMOTICZ_PHASE_EXPORT_L2_IDX", "31")
-DOMOTICZ_PHASE_EXPORT_L3_IDX = _parse_optional_int_setting("DOMOTICZ_PHASE_EXPORT_L3_IDX", "33")
-DOMOTICZ_USE_SIGNED_NET_POWER = _parse_bool_setting("DOMOTICZ_USE_SIGNED_NET_POWER", "1")
-DOMOTICZ_USE_SIGNED_NET_PHASE_POWER = _parse_bool_setting("DOMOTICZ_USE_SIGNED_NET_PHASE_POWER", "0")
+MOSQUITTO_IP = _get_setting("MOSQUITTO_IP", "mosquitto.hs.mfis.net")
+MOSQUITTO_PORT = int(_get_setting("MOSQUITTO_PORT", "1883"))
+CERBO_AC_OUT_TOPIC = _get_setting("CERBO_AC_OUT_TOPIC", "N/48e7da878d35/vebus/276/Ac/Out")
+CERBO_AC_ACTIVEIN_TOPIC = _get_setting("CERBO_AC_ACTIVEIN_TOPIC", "N/48e7da878d35/vebus/276/Ac/ActiveIn")
 LOG_LEVEL_NAME = str(_get_setting("LOG_LEVEL", "INFO")).strip().upper()
 LOG_LEVEL = getattr(logger, LOG_LEVEL_NAME, logger.INFO)
 STATUS_LOG_INTERVAL_SECONDS = max(float(_get_setting("STATUS_LOG_INTERVAL_SECONDS", "30.0")), 0.0)
@@ -191,46 +168,24 @@ def _stop_runtime(
         tcp_master.close()
 
 
-def _log_domoticz_effective_config() -> None:
+def _log_source_effective_config() -> None:
     logger.info(
         (
-            "Domoticz effective mapping: grid_idx=%s(%s) phase_import_idx[L1,L2,L3]=[%s,%s,%s](%s,%s,%s) "
-            "phase_export_idx[L1,L2,L3]=[%s,%s,%s](%s,%s,%s) signed_total=%s(%s) signed_phase=%s(%s)"
+            "Cerbo MQTT source: host=%s(%s) port=%s(%s) ac_out_topic=%s(%s) ac_activein_topic=%s(%s)"
         ),
-        DOMOTICZ_GRID_IDX,
-        _get_setting_source("DOMOTICZ_GRID_IDX"),
-        DOMOTICZ_PHASE_L1_IDX,
-        DOMOTICZ_PHASE_L2_IDX,
-        DOMOTICZ_PHASE_L3_IDX,
-        _get_setting_source("DOMOTICZ_PHASE_L1_IDX"),
-        _get_setting_source("DOMOTICZ_PHASE_L2_IDX"),
-        _get_setting_source("DOMOTICZ_PHASE_L3_IDX"),
-        DOMOTICZ_PHASE_EXPORT_L1_IDX,
-        DOMOTICZ_PHASE_EXPORT_L2_IDX,
-        DOMOTICZ_PHASE_EXPORT_L3_IDX,
-        _get_setting_source("DOMOTICZ_PHASE_EXPORT_L1_IDX"),
-        _get_setting_source("DOMOTICZ_PHASE_EXPORT_L2_IDX"),
-        _get_setting_source("DOMOTICZ_PHASE_EXPORT_L3_IDX"),
-        int(DOMOTICZ_USE_SIGNED_NET_POWER),
-        _get_setting_source("DOMOTICZ_USE_SIGNED_NET_POWER"),
-        int(DOMOTICZ_USE_SIGNED_NET_PHASE_POWER),
-        _get_setting_source("DOMOTICZ_USE_SIGNED_NET_PHASE_POWER"),
+        MOSQUITTO_IP,
+        _get_setting_source("MOSQUITTO_IP"),
+        MOSQUITTO_PORT,
+        _get_setting_source("MOSQUITTO_PORT"),
+        CERBO_AC_OUT_TOPIC,
+        _get_setting_source("CERBO_AC_OUT_TOPIC"),
+        CERBO_AC_ACTIVEIN_TOPIC,
+        _get_setting_source("CERBO_AC_ACTIVEIN_TOPIC"),
     )
-
-    phase_indices = (DOMOTICZ_PHASE_L1_IDX, DOMOTICZ_PHASE_L2_IDX, DOMOTICZ_PHASE_L3_IDX)
-    if any(phase_idx == DOMOTICZ_GRID_IDX for phase_idx in phase_indices):
+    if CERBO_AC_OUT_TOPIC == CERBO_AC_ACTIVEIN_TOPIC:
         logger.warning(
-            "One or more phase import IDX values match DOMOTICZ_GRID_IDX=%s. "
-            "This can cause a phase to mirror grid totals instead of AC-load phase values.",
-            DOMOTICZ_GRID_IDX,
-        )
-    if len(set(phase_indices)) != len(phase_indices):
-        logger.warning(
-            "Duplicate phase import IDX values detected (L1=%s, L2=%s, L3=%s). "
-            "This can cause phase attribution errors on Maxem.",
-            DOMOTICZ_PHASE_L1_IDX,
-            DOMOTICZ_PHASE_L2_IDX,
-            DOMOTICZ_PHASE_L3_IDX,
+            "CERBO_AC_OUT_TOPIC and CERBO_AC_ACTIVEIN_TOPIC are equal. "
+            "This can corrupt register intent between current and active-power rewrites."
         )
 
 
@@ -244,8 +199,8 @@ def main():
     maxem_2 = None
     victron_100 = None
     victron_2 = None
-    usage_cache = None
-    usage_poller = None
+    rewrite_cache = None
+    rewrite_poller = None
     tcp_master = None
     status_ticker = _LoopStatusTicker(STATUS_LOG_INTERVAL_SECONDS)
 
@@ -265,32 +220,18 @@ def main():
 
         tcp_slave_server.start()
         logger.info(f"Modbus TCP slave server started...")
-        _log_domoticz_effective_config()
+        _log_source_effective_config()
 
-        domoticz_client = DomoticzClient(
-            DOMOTICZ_URL,
-            DOMOTICZ_GRID_IDX,
-            timeout_seconds=DOMOTICZ_TIMEOUT_SECONDS,
-        )
-        usage_cache = DomoticzUsageCache(
-            use_signed_net_power=DOMOTICZ_USE_SIGNED_NET_POWER,
-            use_signed_net_phase_power=DOMOTICZ_USE_SIGNED_NET_PHASE_POWER,
-        )
-        usage_poller = DomoticzUsagePoller(
-            domoticz_client,
-            usage_cache,
-            phase_l1_idx=DOMOTICZ_PHASE_L1_IDX,
-            phase_l2_idx=DOMOTICZ_PHASE_L2_IDX,
-            phase_l3_idx=DOMOTICZ_PHASE_L3_IDX,
-            phase_export_l1_idx=DOMOTICZ_PHASE_EXPORT_L1_IDX,
-            phase_export_l2_idx=DOMOTICZ_PHASE_EXPORT_L2_IDX,
-            phase_export_l3_idx=DOMOTICZ_PHASE_EXPORT_L3_IDX,
-            use_signed_net_power=DOMOTICZ_USE_SIGNED_NET_POWER,
-            use_signed_net_phase_power=DOMOTICZ_USE_SIGNED_NET_PHASE_POWER,
-            poll_interval_seconds=DOMOTICZ_USAGE_POLL_INTERVAL_SECONDS,
+        rewrite_cache = CerboMqttCache()
+        rewrite_poller = CerboMqttPoller(
+            broker_host=MOSQUITTO_IP,
+            broker_port=MOSQUITTO_PORT,
+            ac_out_topic_base=CERBO_AC_OUT_TOPIC,
+            ac_active_in_topic_base=CERBO_AC_ACTIVEIN_TOPIC,
+            cache=rewrite_cache,
             logger=logger,
         )
-        usage_poller.start()
+        rewrite_poller.start()
 
         if dry_run_maxem_home:
             logger.info(
@@ -363,17 +304,21 @@ def main():
                                 address_length=addr_len,
                                 source_values=tuple(int(value) for value in acload_values),
                             )
-                            preview_snapshot = usage_cache.snapshot() if usage_cache is not None else None
+                            preview_snapshot = rewrite_cache.snapshot() if rewrite_cache is not None else None
                             usage_watts = preview_snapshot.rewrite_usage_watts if preview_snapshot else 0.0
                             if usage_watts is None:
                                 usage_watts = 0.0
                             phase_usage_watts = preview_snapshot.phase_usage_watts if preview_snapshot else None
+                            phase_current_amps = preview_snapshot.phase_current_amps if preview_snapshot else None
+                            current_n_amps = preview_snapshot.current_n_amps if preview_snapshot else None
                             rewritten_values = rewrite_instantaneous_values(
                                 acload_values,
                                 usage_watts=usage_watts,
                                 phase_usage_watts=phase_usage_watts,
-                                allow_negative=DOMOTICZ_USE_SIGNED_NET_POWER,
-                                allow_negative_phase=DOMOTICZ_USE_SIGNED_NET_PHASE_POWER,
+                                phase_current_amps=phase_current_amps,
+                                current_n_amps=current_n_amps,
+                                allow_negative=True,
+                                allow_negative_phase=True,
                             )
                             preview_signature_value = preview_signature(
                                 capture,
@@ -392,9 +337,10 @@ def main():
                                     (capture.target_slave, capture.source_slave, capture.register_name)
                                 ] = preview_signature_value
                         elif rtu_slave_server and maxem_100:
-                            # Rewrite the instantaneous ABB power block from Domoticz Usage; mirror every other Maxem block.
+                            # Rewrite only the selected instantaneous current/power words from Cerbo MQTT;
+                            # mirror every other Maxem register block verbatim from ABB.
                             if register_name == INSTANTANEOUS_VALUES_REGISTER_NAME:
-                                usage_snapshot = usage_cache.snapshot() if usage_cache is not None else None
+                                usage_snapshot = rewrite_cache.snapshot() if rewrite_cache is not None else None
                                 capture = RegisterCapture(
                                     target_slave=100,
                                     source_slave=100,
@@ -407,12 +353,16 @@ def main():
                                 if usage_watts is None:
                                     usage_watts = 0.0
                                 phase_usage_watts = usage_snapshot.phase_usage_watts if usage_snapshot else None
+                                phase_current_amps = usage_snapshot.phase_current_amps if usage_snapshot else None
+                                current_n_amps = usage_snapshot.current_n_amps if usage_snapshot else None
                                 rewritten_values = rewrite_instantaneous_values(
                                     acload_values,
                                     usage_watts=usage_watts,
                                     phase_usage_watts=phase_usage_watts,
-                                    allow_negative=DOMOTICZ_USE_SIGNED_NET_POWER,
-                                    allow_negative_phase=DOMOTICZ_USE_SIGNED_NET_PHASE_POWER,
+                                    phase_current_amps=phase_current_amps,
+                                    current_n_amps=current_n_amps,
+                                    allow_negative=True,
+                                    allow_negative_phase=True,
                                 )
                                 live_preview_signature = preview_signature(
                                     capture,
@@ -452,7 +402,7 @@ def main():
     except Exception as exc:
         logger.error(f"tcp_master(error): {exc}")
     finally:
-        _stop_runtime(tcp_master, tcp_slave_server, rtu_slave_server, usage_poller)
+        _stop_runtime(tcp_master, tcp_slave_server, rtu_slave_server, rewrite_poller)
 
 if __name__ == "__main__":
     main()

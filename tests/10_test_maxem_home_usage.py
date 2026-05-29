@@ -2,12 +2,17 @@ import unittest
 from unittest.mock import patch
 
 from lib.maxem_home_usage import (
+    CerboMqttSnapshot,
     DomoticzUsageCache,
     DomoticzUsagePoller,
     DomoticzUsageSnapshot,
     INSTANTANEOUS_ACTIVE_POWER_L1_REGISTER_ADDRESS,
     INSTANTANEOUS_ACTIVE_POWER_L2_REGISTER_ADDRESS,
     INSTANTANEOUS_ACTIVE_POWER_L3_REGISTER_ADDRESS,
+    INSTANTANEOUS_CURRENT_L1_REGISTER_ADDRESS,
+    INSTANTANEOUS_CURRENT_L2_REGISTER_ADDRESS,
+    INSTANTANEOUS_CURRENT_L3_REGISTER_ADDRESS,
+    INSTANTANEOUS_CURRENT_N_REGISTER_ADDRESS,
     INSTANTANEOUS_ACTIVE_POWER_TOTAL_OFFSET,
     INSTANTANEOUS_VALUES_REGISTER_ADDRESS,
     INSTANTANEOUS_VALUES_REGISTER_LENGTH,
@@ -137,6 +142,31 @@ class MaxemHomeUsageTests(unittest.TestCase):
         self.assertAlmostEqual(decode_signed_scaled_watts(rewritten, offset=phase_l2_offset), 20.0, places=2)
         self.assertAlmostEqual(decode_signed_scaled_watts(rewritten, offset=phase_l3_offset), 0.0, places=2)
 
+    def test_instantaneous_rewrites_current_fields_from_ac_out(self) -> None:
+        source_values = [0] * INSTANTANEOUS_VALUES_REGISTER_LENGTH
+        rewritten = rewrite_instantaneous_values(
+            tuple(source_values),
+            usage_watts=0.0,
+            phase_usage_watts=(0.0, 0.0, 0.0),
+            phase_current_amps=(1.23, 2.34, 3.45),
+            current_n_amps=0.56,
+        )
+
+        decoded = decode_instantaneous_fields(rewritten)
+        self.assertAlmostEqual(decoded["current_l1"] or 0.0, 1.23, places=2)
+        self.assertAlmostEqual(decoded["current_l2"] or 0.0, 2.34, places=2)
+        self.assertAlmostEqual(decoded["current_l3"] or 0.0, 3.45, places=2)
+        self.assertAlmostEqual(decoded["current_n"] or 0.0, 0.56, places=2)
+
+        changed_words = changed_instantaneous_words(source_values, rewritten)
+        expected = [
+            INSTANTANEOUS_CURRENT_L1_REGISTER_ADDRESS + 1,
+            INSTANTANEOUS_CURRENT_L2_REGISTER_ADDRESS + 1,
+            INSTANTANEOUS_CURRENT_L3_REGISTER_ADDRESS + 1,
+            INSTANTANEOUS_CURRENT_N_REGISTER_ADDRESS + 1,
+        ]
+        self.assertEqual(changed_words, expected)
+
     def test_decode_instantaneous_fields_extracts_expected_values(self) -> None:
         source_values = [0] * INSTANTANEOUS_VALUES_REGISTER_LENGTH
 
@@ -212,15 +242,36 @@ class MaxemHomeUsageTests(unittest.TestCase):
             ],
         )
 
+    def test_preview_message_uses_cerbo_label_and_includes_currents(self) -> None:
+        capture = _instantaneous_capture(1234.5)
+        snapshot = CerboMqttSnapshot(
+            sequence=1,
+            ac_in_phase_watts=(10.0, 20.0, 30.0),
+            ac_in_total_watts=60.0,
+            ac_out_phase_currents=(0.11, 0.22, 0.33),
+            ac_out_current_n=0.44,
+        )
+
+        message = format_instantaneous_preview_lines(capture, snapshot=snapshot)
+
+        self.assertEqual(
+            message,
+            [
+                "ABB source: 1,234.50 W",
+                "Cerbo Usage to Maxem: 60 W",
+                "Cerbo Phase Watts to Maxem: L1=10 W, L2=20 W, L3=30 W",
+                "Cerbo Phase Currents to Maxem: L1=0.11 A, L2=0.22 A, L3=0.33 A, N=0.44 A",
+            ],
+        )
+
     def test_preview_basis_explains_instantaneous_power_semantics(self) -> None:
         message = describe_instantaneous_preview_basis()
 
-        self.assertIn("ABB instantaneous active power total", message)
-        self.assertIn("0x5B14/0x5B15", message)
-        self.assertIn("DOMOTICZ_USE_SIGNED_NET_POWER=1", message)
-        self.assertIn("DOMOTICZ_USE_SIGNED_NET_PHASE_POWER=1", message)
-        self.assertIn("Usage-UsageDeliv", message)
-        self.assertIn("When DOMOTICZ_USE_SIGNED_NET_POWER=0", message)
+        self.assertIn("active_power_total/l1/l2/l3", message)
+        self.assertIn("0x5B14..0x5B1B", message)
+        self.assertIn("Ac/ActiveIn", message)
+        self.assertIn("Ac/Out", message)
+        self.assertIn("clamped to >=0", message)
         self.assertIn("copied verbatim", message)
 
     def test_domoticz_client_parses_multi_idx_payload(self) -> None:

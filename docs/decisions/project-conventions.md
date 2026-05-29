@@ -5,32 +5,33 @@ operator-facing assumptions for `modbus-softsplit`.
 
 ## Active Rewrite Path
 
-- The Maxem rewrite path uses Domoticz device `IDX 20` `Usage` as the live
-  grid usage signal.
-- With `DOMOTICZ_USE_SIGNED_NET_POWER=1` (default), rewrite total watts are
-  computed as `Usage - UsageDeliv` from `IDX 20`.
-- With `DOMOTICZ_USE_SIGNED_NET_POWER=0`, rewrite total watts use non-negative
-  `Usage` import-only behavior.
-- With `DOMOTICZ_USE_SIGNED_NET_PHASE_POWER=0` (default), per-phase rewrite
-  watts stay import-only to preserve AC-load behavior for Maxem fuse-protection
-  logic.
-- With `DOMOTICZ_USE_SIGNED_NET_PHASE_POWER=1`, per-phase rewrite watts use
-  signed net values (phase import minus phase export).
-- The Maxem rewrite path also uses Domoticz per-phase `result.Data` readings:
-  import from `rid=26` (L1), `rid=24` (L2), and `rid=25` (L3), plus export
-  from `rid=32` (L1), `rid=31` (L2), and `rid=33` (L3) when signed-net mode is enabled.
-- House load is ignored for the Maxem rewrite path.
+- The Maxem rewrite path reads source data directly from Victron CerboGX MQTT
+  (read-only), not from Domoticz.
+- MQTT broker defaults:
+  - host `mosquitto.hs.mfis.net`
+  - port `1883`
+  - active-in topic base `N/48e7da878d35/vebus/276/Ac/ActiveIn`
+  - ac-out topic base `N/48e7da878d35/vebus/276/Ac/Out`
+- Power rewrite source:
+  - `Ac/ActiveIn/L1|L2|L3/P` -> active power total + per phase words.
+  - Values may be positive or negative.
+- Current rewrite source:
+  - `Ac/Out/L1|L2|L3/I` -> phase current words.
+  - `Ac/Out/N/I` -> neutral current word when present.
+  - AC-out currents are clamped to `>= 0` before encoding.
 - The ABB target register block is `instantaneous_values`.
 - Rewritten words in that block are:
-  - `0x5B14/0x5B15` active power total from Domoticz grid watts.
-  - `0x5B16/0x5B17`, `0x5B18/0x5B19`, `0x5B1A/0x5B1B` active power L1/L2/L3
-    from Domoticz phase watts.
+  - `0x5B0C/0x5B0D`, `0x5B0E/0x5B0F`, `0x5B10/0x5B11`, `0x5B12/0x5B13`
+    current L1/L2/L3/N from Cerbo `Ac/Out`.
+  - `0x5B14/0x5B15`, `0x5B16/0x5B17`, `0x5B18/0x5B19`, `0x5B1A/0x5B1B`
+    active power total/L1/L2/L3 from Cerbo `Ac/ActiveIn`.
 - All other words in `instantaneous_values` and all other Maxem register blocks
   are mirrored unchanged from the ABB source.
 - Preview logs should stay short and verifiable:
   - `ABB source: X W`
-  - `DZ Usage to Maxem: Y W`
-  - `DZ Phase Watts to Maxem: L1=..., L2=..., L3=...`
+  - `Cerbo Usage to Maxem: Y W`
+  - `Cerbo Phase Watts to Maxem: L1=..., L2=..., L3=...`
+  - `Cerbo Phase Currents to Maxem: L1=..., L2=..., L3=..., N=...`
 - These preview lines are logged at `DEBUG` level and are intended as opt-in
   operator diagnostics (`LOG_LEVEL=DEBUG`).
 - The live RTU path should emit the same short preview when the instantaneous
@@ -59,15 +60,12 @@ operator-facing assumptions for `modbus-softsplit`.
 - `DRY_RUN_MAXEM_HOME=1` in `.env` is the default-mode toggle equivalent to
   starting with `--dry-run-maxem-home`.
 - `--trace-instantaneous-payload` is opt-in and intended for diagnostics only.
-- Domoticz polling must stay off the RTU serving path and remain non-blocking.
-- Domoticz polling should batch all required IDX values into one HTTP request
-  per poll cycle to minimize overhead and jitter.
-- Batch-request visibility should remain debug-only (`Domoticz batch request:
-  ...`) so operators can verify URL/IDX composition without adding info-level
-  log noise.
-- Startup should log effective Domoticz mapping values and source precedence
-  (`env` vs `.env` vs defaults) and warn when phase IDX values collide with
-  grid IDX or with each other.
+- Cerbo MQTT subscriptions must remain read-only; do not publish/control from
+  this runtime.
+- MQTT callbacks must stay lightweight and non-blocking; RTU serving path must
+  remain timing-safe.
+- Startup should log effective Cerbo MQTT source settings and source precedence
+  (`env` vs `.env` vs defaults).
 - The serving loop should remain timing-safe for the RTU client.
 - High-volume loop status logs should be periodic instead of per-cycle to avoid
   unnecessary log I/O overhead (`STATUS_LOG_INTERVAL_SECONDS`, default `30`).

@@ -4,19 +4,19 @@
 
 Validate that Maxem sees:
 
-- Home usage driven by Domoticz rewrite values.
-- Grid phase usage behavior matching expected phase signals.
+- Home/grid power driven by Cerbo `Ac/ActiveIn` rewrite values.
+- Phase current safety behavior driven by Cerbo `Ac/Out` current signals.
 
 ## Preconditions
 
 - Upstream ABB source is reachable via Modbus TCP gateway.
-- Domoticz endpoints are reachable.
+- Cerbo MQTT broker is reachable.
 - Maxem RTU link is stable.
-- Environment variables are configured (`DOMOTICZ_*`, `MODBUS_TCP_GW_*`, `SERIAL_PORT`).
+- Environment variables are configured (`MOSQUITTO_*`, `CERBO_*`, `MODBUS_TCP_GW_*`, `SERIAL_PORT`).
 
 ## Step 1: Offline Sanity Capture
 
-Capture current source + Domoticz values:
+Capture current source + rewrite-source values:
 
 ```bash
 python3 tools/dump_register_block.py --output /tmp/maxem-bundle-live.json
@@ -31,14 +31,12 @@ python3 tools/inspect_instantaneous_payload.py --bundle /tmp/maxem-bundle-live.j
 Expected:
 
 - `changed_words` includes:
+  - `0x5B0C..0x5B13` (current L1/L2/L3/N from Cerbo `Ac/Out`)
   - `0x5B14, 0x5B15` (total power)
   - `0x5B16..0x5B1B` (phase L1/L2/L3 power)
-- Voltage and current fields remain unchanged unless source changed.
-- In signed-total mode (`DOMOTICZ_USE_SIGNED_NET_POWER=1`), total rewrite watts
-  may be negative (import-export semantics).
-- Phase negativity is controlled independently:
-  `DOMOTICZ_USE_SIGNED_NET_PHASE_POWER=1` enables signed phase import-export;
-  `0` keeps import-only phases.
+- Voltage fields remain unchanged unless source changed.
+- Power rewrite values can be positive or negative (Cerbo `Ac/ActiveIn`).
+- Current rewrite values are clamped to non-negative (Cerbo `Ac/Out`).
 
 ## Step 2: Live Runtime with Trace
 
@@ -52,13 +50,13 @@ Watch for:
 
 - Preview lines:
   - `ABB source: ...`
-  - `DZ Usage to Maxem: ...`
-  - `DZ Phase Watts to Maxem: ...`
+  - `Cerbo Usage to Maxem: ...`
+  - `Cerbo Phase Watts to Maxem: ...`
+  - `Cerbo Phase Currents to Maxem: ...`
 - Trace lines indicating only intended words changed in `instantaneous_values`.
-- Optional debug line `Domoticz usage snapshot updated...` should show one
-  coherent grid+phase snapshot per poll cycle (single batched Domoticz request).
-- Startup logs should print effective mapping and source precedence for phase
-  IDX settings so phase attribution issues can be detected quickly.
+- Optional debug line `Cerbo MQTT snapshot updated...` should show coherent
+  ActiveIn phase power + Out phase current snapshots.
+- Startup logs should print effective Cerbo broker/topic settings and source precedence.
 
 ## Step 3: UI Cross-Check
 
@@ -77,7 +75,7 @@ Run for an extended window (for example 2-8 hours) and monitor:
 - Stability of RTU updates.
 - No runaway exception loops.
 - No unexpected expansion of rewritten words.
-- Behavior during Domoticz transient failures (poll warnings should not stop serving loop).
+- Behavior during MQTT transient failures (warnings should not stop serving loop).
 
 ## Known Observability Notes
 
@@ -93,6 +91,6 @@ Run for an extended window (for example 2-8 hours) and monitor:
 
 Validation pass is considered successful when:
 
-- Rewritten words match design (`0x5B14..0x5B1B` only in instantaneous active power fields).
+- Rewritten words match design (`0x5B0C..0x5B1B` for current+active-power fields only).
 - Maxem dashboard behavior aligns with intended Home/Grid semantics across multiple load conditions.
 - Service remains stable over long-running periods.

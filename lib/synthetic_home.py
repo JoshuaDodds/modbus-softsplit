@@ -277,7 +277,7 @@ def format_total_accumulators_preview(
 def describe_total_accumulators_preview_basis() -> str:
     return (
         "Preview basis: retired cumulative-energy prototype output. The active v1 story now lives in "
-        "lib.maxem_home_usage.py and rewrites the ABB instantaneous active-power total from Domoticz IDX 20 Usage. "
+        "lib.maxem_home_usage.py and rewrites selected ABB instantaneous current/power words from Cerbo MQTT. "
         "This helper remains only for historical reference."
     )
 

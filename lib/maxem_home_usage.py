@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from .synthetic_home import DomoticzClient, DomoticzReading, RegisterCapture
+import paho.mqtt.client as mqtt
 
 INSTANTANEOUS_VALUES_REGISTER_NAME = "instantaneous_values"
 INSTANTANEOUS_VALUES_REGISTER_ADDRESS = 0x5B00
@@ -24,6 +27,18 @@ INSTANTANEOUS_ACTIVE_POWER_PHASE_OFFSETS = (
     INSTANTANEOUS_ACTIVE_POWER_L3_REGISTER_ADDRESS - INSTANTANEOUS_VALUES_REGISTER_ADDRESS,
 )
 INSTANTANEOUS_ACTIVE_POWER_PHASE_LENGTH = 2
+INSTANTANEOUS_CURRENT_L1_REGISTER_ADDRESS = 0x5B0C
+INSTANTANEOUS_CURRENT_L2_REGISTER_ADDRESS = 0x5B0E
+INSTANTANEOUS_CURRENT_L3_REGISTER_ADDRESS = 0x5B10
+INSTANTANEOUS_CURRENT_N_REGISTER_ADDRESS = 0x5B12
+INSTANTANEOUS_CURRENT_PHASE_OFFSETS = (
+    INSTANTANEOUS_CURRENT_L1_REGISTER_ADDRESS - INSTANTANEOUS_VALUES_REGISTER_ADDRESS,
+    INSTANTANEOUS_CURRENT_L2_REGISTER_ADDRESS - INSTANTANEOUS_VALUES_REGISTER_ADDRESS,
+    INSTANTANEOUS_CURRENT_L3_REGISTER_ADDRESS - INSTANTANEOUS_VALUES_REGISTER_ADDRESS,
+)
+INSTANTANEOUS_CURRENT_N_OFFSET = INSTANTANEOUS_CURRENT_N_REGISTER_ADDRESS - INSTANTANEOUS_VALUES_REGISTER_ADDRESS
+INSTANTANEOUS_CURRENT_REGISTER_LENGTH = 2
+INSTANTANEOUS_CURRENT_SCALE = 0.01
 
 
 @dataclass(frozen=True)
@@ -254,6 +269,222 @@ class DomoticzUsagePoller(threading.Thread):
             self._stop_event.wait(self._poll_interval_seconds)
 
 
+@dataclass(frozen=True)
+class CerboMqttSnapshot:
+    sequence: int
+    ac_in_phase_watts: tuple[float, float, float] | None = None
+    ac_in_total_watts: float | None = None
+    ac_out_phase_currents: tuple[float, float, float] | None = None
+    ac_out_current_n: float | None = None
+    source_label: str = "Cerbo"
+
+    @property
+    def rewrite_usage_watts(self) -> float | None:
+        return self.ac_in_total_watts
+
+    @property
+    def phase_usage_watts(self) -> tuple[float, float, float] | None:
+        return self.ac_in_phase_watts
+
+    @property
+    def phase_current_amps(self) -> tuple[float, float, float] | None:
+        return self.ac_out_phase_currents
+
+    @property
+    def current_n_amps(self) -> float | None:
+        return self.ac_out_current_n
+
+
+class CerboMqttCache:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._sequence = 0
+        self._ac_in_phase_watts: tuple[float, float, float] | None = None
+        self._ac_in_total_watts: float | None = None
+        self._ac_out_phase_currents: tuple[float, float, float] | None = None
+        self._ac_out_current_n: float | None = None
+
+    def update(
+        self,
+        *,
+        ac_in_phase_watts: tuple[float, float, float],
+        ac_out_phase_currents: tuple[float, float, float],
+        ac_out_current_n: float | None,
+    ) -> CerboMqttSnapshot:
+        with self._lock:
+            self._sequence += 1
+            self._ac_in_phase_watts = tuple(float(value) for value in ac_in_phase_watts)
+            self._ac_in_total_watts = float(sum(self._ac_in_phase_watts))
+            self._ac_out_phase_currents = tuple(max(float(value), 0.0) for value in ac_out_phase_currents)
+            self._ac_out_current_n = None if ac_out_current_n is None else max(float(ac_out_current_n), 0.0)
+            return CerboMqttSnapshot(
+                sequence=self._sequence,
+                ac_in_phase_watts=self._ac_in_phase_watts,
+                ac_in_total_watts=self._ac_in_total_watts,
+                ac_out_phase_currents=self._ac_out_phase_currents,
+                ac_out_current_n=self._ac_out_current_n,
+            )
+
+    def snapshot(self) -> CerboMqttSnapshot:
+        with self._lock:
+            return CerboMqttSnapshot(
+                sequence=self._sequence,
+                ac_in_phase_watts=self._ac_in_phase_watts,
+                ac_in_total_watts=self._ac_in_total_watts,
+                ac_out_phase_currents=self._ac_out_phase_currents,
+                ac_out_current_n=self._ac_out_current_n,
+            )
+
+
+class CerboMqttPoller(threading.Thread):
+    def __init__(
+        self,
+        *,
+        broker_host: str,
+        broker_port: int,
+        ac_out_topic_base: str,
+        ac_active_in_topic_base: str,
+        cache: CerboMqttCache,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        super().__init__(name="cerbo-mqtt-poller", daemon=True)
+        self._broker_host = str(broker_host).strip()
+        self._broker_port = int(broker_port)
+        self._ac_out_topic_base = ac_out_topic_base.rstrip("/")
+        self._ac_active_in_topic_base = ac_active_in_topic_base.rstrip("/")
+        self._cache = cache
+        self._logger = logger or logging.getLogger(__name__)
+        self._stop_event = threading.Event()
+        self._phase_in_watts: list[float | None] = [None, None, None]
+        self._phase_out_currents: list[float | None] = [None, None, None]
+        self._current_n: float | None = None
+        self._client = mqtt.Client(client_id=f"modbus-softsplit-{int(time.time())}", protocol=mqtt.MQTTv311)
+        self._client.enable_logger(self._logger)
+        self._client.on_connect = self._on_connect
+        self._client.on_message = self._on_message
+        self._client.on_disconnect = self._on_disconnect
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        try:
+            self._client.disconnect()
+        except Exception:
+            pass
+
+    def _on_connect(self, client, userdata, flags, rc):
+        if rc != 0:
+            self._logger.warning("Cerbo MQTT connect failed: rc=%s", rc)
+            return
+
+        subscriptions = [
+            (f"{self._ac_active_in_topic_base}/L1/P", 0),
+            (f"{self._ac_active_in_topic_base}/L2/P", 0),
+            (f"{self._ac_active_in_topic_base}/L3/P", 0),
+            (f"{self._ac_out_topic_base}/L1/I", 0),
+            (f"{self._ac_out_topic_base}/L2/I", 0),
+            (f"{self._ac_out_topic_base}/L3/I", 0),
+            (f"{self._ac_out_topic_base}/N/I", 0),
+        ]
+        for topic, qos in subscriptions:
+            client.subscribe(topic, qos=qos)
+        self._logger.info(
+            "Cerbo MQTT connected to %s:%s; subscribed read-only to Ac/ActiveIn and Ac/Out topics.",
+            self._broker_host,
+            self._broker_port,
+        )
+
+    def _on_disconnect(self, client, userdata, rc):
+        if self._stop_event.is_set():
+            return
+        self._logger.warning("Cerbo MQTT disconnected unexpectedly: rc=%s", rc)
+
+    @staticmethod
+    def _payload_value(payload: bytes) -> float:
+        raw = payload.decode("utf-8", "replace")
+        parsed = json.loads(raw)
+        if not isinstance(parsed, Mapping) or "value" not in parsed:
+            raise ValueError(f"Unexpected MQTT payload shape: {raw!r}")
+        return float(parsed["value"])
+
+    def _update_phase_slot(self, topic: str, value: float) -> bool:
+        for phase_index, phase_name in enumerate(("L1", "L2", "L3")):
+            if topic.endswith(f"/{phase_name}/P"):
+                self._phase_in_watts[phase_index] = float(value)
+                return True
+            if topic.endswith(f"/{phase_name}/I"):
+                self._phase_out_currents[phase_index] = max(float(value), 0.0)
+                return True
+        if topic.endswith("/N/I"):
+            self._current_n = max(float(value), 0.0)
+            return True
+        return False
+
+    def _on_message(self, client, userdata, msg):
+        try:
+            value = self._payload_value(msg.payload)
+        except Exception as exc:
+            self._logger.warning("Cerbo MQTT payload parse failed for topic=%s: %s", msg.topic, exc)
+            return
+
+        if not self._update_phase_slot(msg.topic, value):
+            return
+
+        if any(v is None for v in self._phase_in_watts) or any(v is None for v in self._phase_out_currents):
+            return
+
+        snapshot = self._cache.update(
+            ac_in_phase_watts=(
+                float(self._phase_in_watts[0]),
+                float(self._phase_in_watts[1]),
+                float(self._phase_in_watts[2]),
+            ),
+            ac_out_phase_currents=(
+                float(self._phase_out_currents[0]),
+                float(self._phase_out_currents[1]),
+                float(self._phase_out_currents[2]),
+            ),
+            ac_out_current_n=self._current_n,
+        )
+        current_n_text = "n/a" if snapshot.current_n_amps is None else f"{snapshot.current_n_amps:.2f}"
+        self._logger.debug(
+            (
+                "Cerbo MQTT snapshot updated: sequence=%s ac_in_total_watts=%.2f ac_in_phase_watts=(%.2f, %.2f, %.2f) "
+                "ac_out_phase_currents=(%.2f, %.2f, %.2f) ac_out_current_n=%s"
+            ),
+            snapshot.sequence,
+            snapshot.rewrite_usage_watts or 0.0,
+            snapshot.phase_usage_watts[0] if snapshot.phase_usage_watts else 0.0,
+            snapshot.phase_usage_watts[1] if snapshot.phase_usage_watts else 0.0,
+            snapshot.phase_usage_watts[2] if snapshot.phase_usage_watts else 0.0,
+            snapshot.phase_current_amps[0] if snapshot.phase_current_amps else 0.0,
+            snapshot.phase_current_amps[1] if snapshot.phase_current_amps else 0.0,
+            snapshot.phase_current_amps[2] if snapshot.phase_current_amps else 0.0,
+            current_n_text,
+        )
+
+    def run(self) -> None:
+        if not self._broker_host:
+            self._logger.info("Cerbo MQTT polling disabled: empty broker host.")
+            return
+
+        try:
+            self._client.connect(self._broker_host, self._broker_port, 60)
+            self._client.loop_start()
+            while not self._stop_event.wait(0.2):
+                pass
+        except Exception as exc:  # pragma: no cover - defensive log path
+            self._logger.warning("Cerbo MQTT poller failed: %s", exc)
+        finally:
+            try:
+                self._client.loop_stop()
+            except Exception:
+                pass
+            try:
+                self._client.disconnect()
+            except Exception:
+                pass
+
+
 def _format_watts(value: float) -> str:
     if abs(value - round(value)) < 1e-9:
         return f"{int(round(value)):,} W"
@@ -270,12 +501,10 @@ def _format_value(value: float | None, unit: str) -> str:
 
 def describe_instantaneous_preview_basis() -> str:
     return (
-        "Preview basis: ABB instantaneous active power total lives in 0x5B14/0x5B15 as a signed 0.01 W register. "
-        "When DOMOTICZ_USE_SIGNED_NET_POWER=1, we encode signed net watts (Usage-UsageDeliv) for active_power_total. "
-        "For phases, DOMOTICZ_USE_SIGNED_NET_PHASE_POWER=1 enables signed per-phase net watts "
-        "(phase import minus phase export indices); when disabled we encode non-negative phase import values. "
-        "When DOMOTICZ_USE_SIGNED_NET_POWER=0, total uses non-negative grid import Usage. "
-        "All other registers in instantaneous_values are copied verbatim from the ABB source. House load is ignored."
+        "Preview basis: active_power_total/l1/l2/l3 (0x5B14..0x5B1B) are rewritten from Cerbo Ac/ActiveIn phase watts. "
+        "current_l1/l2/l3/n (0x5B0C..0x5B13) are rewritten from Cerbo Ac/Out phase currents with non-negative clamp. "
+        "Ac/ActiveIn phase watts may be positive or negative; Ac/Out currents are clamped to >=0 before encoding. "
+        "All other registers in instantaneous_values are copied verbatim from the ABB source."
     )
 
 
@@ -348,11 +577,23 @@ def encode_signed_scaled_watts(
     )
 
 
+def encode_unsigned_scaled_amps(value_amps: float) -> tuple[int, int]:
+    raw = int(round(max(float(value_amps), 0.0) / INSTANTANEOUS_CURRENT_SCALE))
+    raw = max(min(raw, 0xFFFFFFFF), 0)
+    payload = raw.to_bytes(4, byteorder="big", signed=False)
+    return (
+        int.from_bytes(payload[:2], byteorder="big"),
+        int.from_bytes(payload[2:], byteorder="big"),
+    )
+
+
 def rewrite_instantaneous_values(
     source_values: Sequence[int],
     *,
     usage_watts: float,
     phase_usage_watts: tuple[float, float, float] | None = None,
+    phase_current_amps: tuple[float, float, float] | None = None,
+    current_n_amps: float | None = None,
     allow_negative: bool = False,
     allow_negative_phase: bool | None = None,
 ) -> tuple[int, ...]:
@@ -376,16 +617,66 @@ def rewrite_instantaneous_values(
             values[phase_offset] = phase_high_word
             values[phase_offset + 1] = phase_low_word
 
+    if phase_current_amps is not None:
+        for phase_index, phase_offset in enumerate(INSTANTANEOUS_CURRENT_PHASE_OFFSETS):
+            if len(values) < phase_offset + INSTANTANEOUS_CURRENT_REGISTER_LENGTH:
+                continue
+            phase_high_word, phase_low_word = encode_unsigned_scaled_amps(phase_current_amps[phase_index])
+            values[phase_offset] = phase_high_word
+            values[phase_offset + 1] = phase_low_word
+
+    if current_n_amps is not None and len(values) >= INSTANTANEOUS_CURRENT_N_OFFSET + INSTANTANEOUS_CURRENT_REGISTER_LENGTH:
+        n_high_word, n_low_word = encode_unsigned_scaled_amps(current_n_amps)
+        values[INSTANTANEOUS_CURRENT_N_OFFSET] = n_high_word
+        values[INSTANTANEOUS_CURRENT_N_OFFSET + 1] = n_low_word
+
     return tuple(values)
+
+
+def _snapshot_rewrite_usage_watts(snapshot: Any | None) -> float | None:
+    if snapshot is None:
+        return None
+    return getattr(snapshot, "rewrite_usage_watts", None)
+
+
+def _snapshot_phase_usage_watts(snapshot: Any | None) -> tuple[float, float, float] | None:
+    if snapshot is None:
+        return None
+    return getattr(snapshot, "phase_usage_watts", None)
+
+
+def _snapshot_phase_current_amps(snapshot: Any | None) -> tuple[float, float, float] | None:
+    if snapshot is None:
+        return None
+    return getattr(snapshot, "phase_current_amps", None)
+
+
+def _snapshot_current_n_amps(snapshot: Any | None) -> float | None:
+    if snapshot is None:
+        return None
+    return getattr(snapshot, "current_n_amps", None)
+
+
+def _snapshot_source_label(snapshot: Any | None) -> str:
+    if snapshot is None:
+        return "Cerbo"
+    explicit_label = getattr(snapshot, "source_label", None)
+    if explicit_label not in (None, ""):
+        return str(explicit_label)
+    if hasattr(snapshot, "reading"):
+        return "DZ"
+    return "Cerbo"
 
 
 def preview_signature(
     capture: RegisterCapture,
     *,
-    snapshot: DomoticzUsageSnapshot | None,
+    snapshot: Any | None,
 ) -> tuple[Any, ...]:
-    usage_watts = snapshot.rewrite_usage_watts if snapshot else None
-    sequence = snapshot.sequence if snapshot else None
+    usage_watts = _snapshot_rewrite_usage_watts(snapshot)
+    sequence = getattr(snapshot, "sequence", None) if snapshot else None
+    phase_currents = _snapshot_phase_current_amps(snapshot)
+    current_n = _snapshot_current_n_amps(snapshot)
     return (
         capture.target_slave,
         capture.source_slave,
@@ -395,36 +686,50 @@ def preview_signature(
         capture.source_values,
         sequence,
         usage_watts,
+        phase_currents,
+        current_n,
     )
 
 
 def format_instantaneous_preview_lines(
     capture: RegisterCapture,
     *,
-    snapshot: DomoticzUsageSnapshot | None,
+    snapshot: Any | None,
 ) -> list[str]:
     if capture.target_slave != 100 or capture.register_name != INSTANTANEOUS_VALUES_REGISTER_NAME:
         return []
 
     source_watts = decode_signed_scaled_watts(capture.source_values)
-    usage_watts = snapshot.rewrite_usage_watts if snapshot else None
+    usage_watts = _snapshot_rewrite_usage_watts(snapshot)
+    source_label = _snapshot_source_label(snapshot)
 
     if source_watts is None or usage_watts is None:
         return [
             "ABB source: awaiting baseline",
-            "DZ Usage to Maxem: awaiting baseline",
+            f"{source_label} Usage to Maxem: awaiting baseline",
         ]
 
     lines = [
         f"ABB source: {_format_watts(source_watts)}",
-        f"DZ Usage to Maxem: {_format_watts(usage_watts)}",
+        f"{source_label} Usage to Maxem: {_format_watts(usage_watts)}",
     ]
-    if snapshot and snapshot.phase_usage_watts is not None:
+    phase_usage_watts = _snapshot_phase_usage_watts(snapshot)
+    if phase_usage_watts is not None:
         lines.append(
-            "DZ Phase Watts to Maxem: "
-            f"L1={_format_watts(snapshot.phase_usage_watts[0])}, "
-            f"L2={_format_watts(snapshot.phase_usage_watts[1])}, "
-            f"L3={_format_watts(snapshot.phase_usage_watts[2])}"
+            f"{source_label} Phase Watts to Maxem: "
+            f"L1={_format_watts(phase_usage_watts[0])}, "
+            f"L2={_format_watts(phase_usage_watts[1])}, "
+            f"L3={_format_watts(phase_usage_watts[2])}"
+        )
+    phase_current_amps = _snapshot_phase_current_amps(snapshot)
+    current_n_amps = _snapshot_current_n_amps(snapshot)
+    if phase_current_amps is not None:
+        lines.append(
+            f"{source_label} Phase Currents to Maxem: "
+            f"L1={_format_value(phase_current_amps[0], 'A')}, "
+            f"L2={_format_value(phase_current_amps[1], 'A')}, "
+            f"L3={_format_value(phase_current_amps[2], 'A')}, "
+            f"N={_format_value(current_n_amps, 'A')}"
         )
     return lines
 

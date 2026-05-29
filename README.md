@@ -45,24 +45,24 @@ your specific situation.
   behavior.
 - You can also set `DRY_RUN_MAXEM_HOME=1` in `.env` to make dry-run the default without changing service/unit args.
 - In dry-run mode the Maxem preview is intentionally short and easy to compare against dashboards:
-  `ABB source: X W`, `DZ Usage to Maxem: Y W`, and `DZ Phase Watts to Maxem: L1=..., L2=..., L3=...`.
+  `ABB source: X W`, `Cerbo Usage to Maxem: Y W`, and `Cerbo Phase Watts to Maxem: L1=..., L2=..., L3=...`.
   These lines are emitted at `DEBUG` level (set `LOG_LEVEL=DEBUG` when you want them).
-- The corrected v1 story rewrites only ABB `instantaneous_values` active-power fields while mirroring all other words
-  verbatim. By default (`DOMOTICZ_USE_SIGNED_NET_POWER=1`) we encode signed net watts for total into ABB-compatible registers:
-  total uses `IDX 20 Usage-UsageDeliv`. Phase rewrites are controlled independently by
-  `DOMOTICZ_USE_SIGNED_NET_PHASE_POWER` and default to import-only AC-load values.
-  Current phase import mapping defaults to `rid=26/24/25` for `L1/L2/L3`; optional phase export mapping remains `rid=32/31/33`.
-  When phase signed-net mode is enabled, phases use import-export; otherwise they stay import-only.
-  Rewrites are encoded into `0x5B14/0x5B15` (total), `0x5B16/0x5B17` (L1), `0x5B18/0x5B19` (L2), and `0x5B1A/0x5B1B` (L3).
-  House load is not forwarded to Maxem. The earlier cumulative-counter preview was a prototype interpretation and is deprecated.
+- The active rewrite story now reads directly from Victron CerboGX MQTT (read-only) and rewrites selected words in
+  ABB `instantaneous_values` while mirroring all other words verbatim.
+  - `active_power_total/l1/l2/l3` (`0x5B14..0x5B1B`) are sourced from `Ac/ActiveIn` phase watts.
+  - `current_l1/l2/l3/n` (`0x5B0C..0x5B13`) are sourced from `Ac/Out` phase currents.
+  - `Ac/ActiveIn` values may be positive or negative; `Ac/Out` currents are clamped to non-negative values.
+  This keeps Maxem home/grid power semantics aligned with grid import/export while preserving AC-out current safety inputs
+  used for EV phase protection.
 - The dry-run logger prints one semantic line before the preview values so it is obvious that the preview is the
-  ABB instantaneous power register being rewritten from Domoticz `Usage`.
+  ABB instantaneous register block being rewritten from Cerbo MQTT.
 - Register bundle captures and replay previews live under `tools/`. The dump helper defaults to `instantaneous_values`
   only, and the replay helper prints the same preview lines without touching the RTU adapter.
 - Preview semantics are simple:
   - `ABB source` is the decoded instantaneous active-power total from ABB.
-  - `DZ Usage to Maxem` is the rewrite total watts (signed net by default, import-only when `DOMOTICZ_USE_SIGNED_NET_POWER=0`).
-  - `DZ Phase Watts to Maxem` are per-phase rewrite watts (import-only by default, import-export when `DOMOTICZ_USE_SIGNED_NET_PHASE_POWER=1`).
+  - `Cerbo Usage to Maxem` is the rewrite total watts from `Ac/ActiveIn`.
+  - `Cerbo Phase Watts to Maxem` are per-phase rewrite watts from `Ac/ActiveIn`.
+  - `Cerbo Phase Currents to Maxem` are per-phase + neutral current amps from `Ac/Out`.
 - Core application modules now live under `lib/` so the repo root stays focused on the entrypoint, tools,
   and docs.
 
@@ -76,19 +76,17 @@ your specific situation.
   `python3 tools/replay_maxem_preview.py --help` before using real captures.
 - `python3 tools/dump_register_block.py` defaults to the ABB `instantaneous_values` block; pass `--register` to add
   extra blocks only when you truly need them.
-- `python3 tools/replay_maxem_preview.py --bundle <file>` prints the same `ABB source`, `DZ Usage to Maxem`, and
-  optional `DZ Phase Watts to Maxem` preview lines that the dry-run runtime uses.
+- `python3 tools/replay_maxem_preview.py --bundle <file>` prints the same short preview line format the dry-run
+  runtime uses (`ABB source` plus rewrite lines) from a captured bundle.
 - `python3 tools/inspect_instantaneous_payload.py --bundle <file>` unpacks the key ABB instantaneous fields and shows
   source vs rewritten values plus the exact word addresses that changed.
 - `python3 main.py --trace-instantaneous-payload` enables the same field-level diff in live runtime logs so we can
   verify exactly what is being written without changing default behavior.
-- Domoticz polling now performs one batched `json.htm?type=devices&rid=...` request per cycle for grid + phase values
-  to reduce HTTP overhead and timing jitter.
-- At `DEBUG` level the poller logs the exact batched Domoticz URL each cycle (`Domoticz batch request: ...`) so you can
-  verify the single-request behavior in both live and dry-run modes.
-- Startup logs now print the effective Domoticz phase mapping (and whether values came from `env`, `.env`, or defaults),
-  plus warnings for duplicate phase IDX values or phase IDX collisions with grid IDX.
-- `LOG_LEVEL` defaults to `INFO`; set `LOG_LEVEL=DEBUG` to show preview lines (`ABB source` / `DZ ... to Maxem`).
+- Cerbo MQTT poller is read-only and subscribes to:
+  - `CERBO_AC_OUT_TOPIC` (default `N/48e7da878d35/vebus/276/Ac/Out`)
+  - `CERBO_AC_ACTIVEIN_TOPIC` (default `N/48e7da878d35/vebus/276/Ac/ActiveIn`)
+- At `DEBUG` level the runtime logs snapshot updates from MQTT and preview lines (`ABB source` / `Cerbo ... to Maxem`).
+- Startup logs print effective Cerbo source settings and where values came from (`env`, `.env`, or defaults).
 - The main loop now handles `Ctrl-C` cleanly in one interrupt and stops the poller and servers without a traceback.
 - Canonical project-specific runtime rules and durable decisions live in
   `docs/decisions/project-conventions.md`.
