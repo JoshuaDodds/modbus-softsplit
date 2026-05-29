@@ -14,6 +14,17 @@ INSTANTANEOUS_VALUES_REGISTER_NAME = "instantaneous_values"
 INSTANTANEOUS_VALUES_REGISTER_ADDRESS = 0x5B00
 INSTANTANEOUS_VALUES_REGISTER_LENGTH = 66
 
+INSTANTANEOUS_VOLTAGE_L1_REGISTER_ADDRESS = 0x5B00
+INSTANTANEOUS_VOLTAGE_L2_REGISTER_ADDRESS = 0x5B02
+INSTANTANEOUS_VOLTAGE_L3_REGISTER_ADDRESS = 0x5B04
+INSTANTANEOUS_VOLTAGE_PHASE_OFFSETS = (
+    INSTANTANEOUS_VOLTAGE_L1_REGISTER_ADDRESS - INSTANTANEOUS_VALUES_REGISTER_ADDRESS,
+    INSTANTANEOUS_VOLTAGE_L2_REGISTER_ADDRESS - INSTANTANEOUS_VALUES_REGISTER_ADDRESS,
+    INSTANTANEOUS_VOLTAGE_L3_REGISTER_ADDRESS - INSTANTANEOUS_VALUES_REGISTER_ADDRESS,
+)
+INSTANTANEOUS_VOLTAGE_PHASE_SCALE = 0.1
+INSTANTANEOUS_VOLTAGE_PHASE_LENGTH = 2
+
 INSTANTANEOUS_ACTIVE_POWER_TOTAL_REGISTER_ADDRESS = 0x5B14
 INSTANTANEOUS_ACTIVE_POWER_TOTAL_OFFSET = INSTANTANEOUS_ACTIVE_POWER_TOTAL_REGISTER_ADDRESS - INSTANTANEOUS_VALUES_REGISTER_ADDRESS
 INSTANTANEOUS_ACTIVE_POWER_TOTAL_REGISTER_LENGTH = 2
@@ -347,6 +358,8 @@ class CerboMqttPoller(threading.Thread):
         cache: CerboMqttCache,
         protocol_debug: bool = False,
         snapshot_debug_interval_seconds: float = 0.0,
+        coherent_phase_frames: bool = True,
+        coherent_phase_frame_max_skew_seconds: float = 1.5,
         logger: logging.Logger | None = None,
     ) -> None:
         super().__init__(name="cerbo-mqtt-poller", daemon=True)
@@ -360,8 +373,14 @@ class CerboMqttPoller(threading.Thread):
         self._protocol_debug = bool(protocol_debug)
         self._snapshot_debug_interval_seconds = max(float(snapshot_debug_interval_seconds), 0.0)
         self._next_snapshot_log_time = 0.0
+        self._coherent_phase_frames = bool(coherent_phase_frames)
+        self._coherent_phase_frame_max_skew_seconds = max(float(coherent_phase_frame_max_skew_seconds), 0.0)
         self._phase_in_watts: list[float | None] = [None, None, None]
         self._phase_out_currents: list[float | None] = [None, None, None]
+        self._phase_in_update_times: list[float] = [0.0, 0.0, 0.0]
+        self._phase_out_update_times: list[float] = [0.0, 0.0, 0.0]
+        self._phase_in_updated_mask = 0
+        self._phase_out_updated_mask = 0
         self._current_n: float | None = None
         self._client = mqtt.Client(client_id=f"modbus-softsplit-{int(time.time())}", protocol=mqtt.MQTTv311)
         if self._protocol_debug:
@@ -413,17 +432,51 @@ class CerboMqttPoller(threading.Thread):
         return float(parsed["value"])
 
     def _update_phase_slot(self, topic: str, value: float) -> bool:
+        now = time.monotonic()
         for phase_index, phase_name in enumerate(("L1", "L2", "L3")):
             if topic.endswith(f"/{phase_name}/P"):
                 self._phase_in_watts[phase_index] = float(value)
+                self._phase_in_update_times[phase_index] = now
+                self._phase_in_updated_mask |= 1 << phase_index
                 return True
             if topic.endswith(f"/{phase_name}/I"):
                 self._phase_out_currents[phase_index] = max(float(value), 0.0)
+                self._phase_out_update_times[phase_index] = now
+                self._phase_out_updated_mask |= 1 << phase_index
                 return True
         if topic.endswith("/N/I"):
             self._current_n = max(float(value), 0.0)
             return True
         return False
+
+    def _has_baseline_values(self) -> bool:
+        return not any(v is None for v in self._phase_in_watts) and not any(v is None for v in self._phase_out_currents)
+
+    def _has_full_coherent_frame(self) -> bool:
+        full_mask = 0b111
+        return self._phase_in_updated_mask == full_mask and self._phase_out_updated_mask == full_mask
+
+    def _phase_skew_exceeds_threshold(self) -> bool:
+        if self._coherent_phase_frame_max_skew_seconds <= 0.0:
+            return False
+
+        phase_in_skew = max(self._phase_in_update_times) - min(self._phase_in_update_times)
+        phase_out_skew = max(self._phase_out_update_times) - min(self._phase_out_update_times)
+        return (
+            phase_in_skew > self._coherent_phase_frame_max_skew_seconds
+            or phase_out_skew > self._coherent_phase_frame_max_skew_seconds
+        )
+
+    def _ready_for_publish(self) -> bool:
+        if not self._has_baseline_values():
+            return False
+        if not self._coherent_phase_frames:
+            return True
+        if not self._has_full_coherent_frame():
+            return False
+        if self._phase_skew_exceeds_threshold():
+            return False
+        return True
 
     def _on_message(self, client, userdata, msg):
         try:
@@ -435,7 +488,7 @@ class CerboMqttPoller(threading.Thread):
         if not self._update_phase_slot(msg.topic, value):
             return
 
-        if any(v is None for v in self._phase_in_watts) or any(v is None for v in self._phase_out_currents):
+        if not self._ready_for_publish():
             return
 
         snapshot = self._cache.update(
@@ -451,6 +504,10 @@ class CerboMqttPoller(threading.Thread):
             ),
             ac_out_current_n=self._current_n,
         )
+        if self._coherent_phase_frames:
+            self._phase_in_updated_mask = 0
+            self._phase_out_updated_mask = 0
+
         if self._snapshot_debug_interval_seconds <= 0.0:
             return
 
@@ -515,9 +572,9 @@ def _format_value(value: float | None, unit: str) -> str:
 
 def describe_instantaneous_preview_basis() -> str:
     return (
-        "Preview basis: active_power_total/l1/l2/l3 (0x5B14..0x5B1B) are rewritten from Cerbo Ac/ActiveIn phase watts. "
+        "Preview basis: active_power_total (0x5B14/0x5B15) is rewritten from Cerbo Ac/ActiveIn total watts. "
+        "active_power_l1/l2/l3 (0x5B16..0x5B1B) follow CERBO_PHASE_POWER_SOURCE mode (activein, acout-derived, or abb passthrough). "
         "current_l1/l2/l3/n (0x5B0C..0x5B13) are rewritten from Cerbo Ac/Out phase currents with non-negative clamp. "
-        "Ac/ActiveIn phase watts may be positive or negative; Ac/Out currents are clamped to >=0 before encoding. "
         "All other registers in instantaneous_values are copied verbatim from the ABB source."
     )
 
@@ -571,6 +628,32 @@ def decode_instantaneous_fields(register_values: Sequence[int]) -> dict[str, flo
             register_length=spec.register_length,
         )
     return decoded
+
+
+def derive_phase_watts_from_currents(
+    source_values: Sequence[int],
+    phase_current_amps: tuple[float, float, float] | None,
+    *,
+    fallback_phase_voltage_volts: float = 230.0,
+) -> tuple[float, float, float] | None:
+    if phase_current_amps is None:
+        return None
+
+    derived_watts: list[float] = []
+    for phase_index, phase_offset in enumerate(INSTANTANEOUS_VOLTAGE_PHASE_OFFSETS):
+        voltage = _decode_scaled_value(
+            source_values,
+            offset=phase_offset,
+            scale=INSTANTANEOUS_VOLTAGE_PHASE_SCALE,
+            signed=False,
+            register_length=INSTANTANEOUS_VOLTAGE_PHASE_LENGTH,
+        )
+        if voltage is None or voltage <= 0.0:
+            voltage = float(fallback_phase_voltage_volts)
+        amps = max(float(phase_current_amps[phase_index]), 0.0)
+        derived_watts.append(float(voltage) * amps)
+
+    return (derived_watts[0], derived_watts[1], derived_watts[2])
 
 
 def encode_signed_scaled_watts(
@@ -689,6 +772,7 @@ def preview_signature(
 ) -> tuple[Any, ...]:
     usage_watts = _snapshot_rewrite_usage_watts(snapshot)
     sequence = getattr(snapshot, "sequence", None) if snapshot else None
+    phase_usage_watts = _snapshot_phase_usage_watts(snapshot)
     phase_currents = _snapshot_phase_current_amps(snapshot)
     current_n = _snapshot_current_n_amps(snapshot)
     return (
@@ -700,6 +784,7 @@ def preview_signature(
         capture.source_values,
         sequence,
         usage_watts,
+        phase_usage_watts,
         phase_currents,
         current_n,
     )

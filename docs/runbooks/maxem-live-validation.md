@@ -13,6 +13,11 @@ Validate that Maxem sees:
 - Cerbo MQTT broker is reachable.
 - Maxem RTU link is stable.
 - Environment variables are configured (`MOSQUITTO_*`, `CERBO_*`, `MODBUS_TCP_GW_*`, `SERIAL_PORT`).
+- If phase sign behavior is under investigation, explicitly record:
+  - `CERBO_PHASE_POWER_SOURCE`
+  - `CERBO_FORCE_NONNEGATIVE_PHASE_POWER`
+  - `CERBO_COHERENT_PHASE_FRAMES`
+  - `CERBO_COHERENT_PHASE_FRAME_MAX_SKEW_SECONDS`
 
 ## Step 1: Offline Sanity Capture
 

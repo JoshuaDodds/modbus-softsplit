@@ -21,6 +21,7 @@ from lib.maxem_home_usage import (
     decode_instantaneous_fields,
     decode_signed_scaled_watts,
     describe_instantaneous_preview_basis,
+    derive_phase_watts_from_currents,
     encode_signed_scaled_watts,
     format_instantaneous_diff_lines,
     format_instantaneous_preview_lines,
@@ -194,6 +195,41 @@ class MaxemHomeUsageTests(unittest.TestCase):
         self.assertAlmostEqual(decoded["current_l3"] or 0.0, 4.38, places=2)
         self.assertAlmostEqual(decoded["active_power_total"] or 0.0, 3470.91, places=2)
 
+    def test_derive_phase_watts_from_currents_uses_source_voltages(self) -> None:
+        source_values = [0] * INSTANTANEOUS_VALUES_REGISTER_LENGTH
+
+        def set_voltage(address: int, value_volts: float) -> None:
+            offset = address - INSTANTANEOUS_VALUES_REGISTER_ADDRESS
+            raw = int(round(value_volts / 0.1))
+            payload = raw.to_bytes(4, byteorder="big", signed=False)
+            source_values[offset] = int.from_bytes(payload[:2], byteorder="big")
+            source_values[offset + 1] = int.from_bytes(payload[2:], byteorder="big")
+
+        set_voltage(0x5B00, 230.0)
+        set_voltage(0x5B02, 231.0)
+        set_voltage(0x5B04, 232.0)
+
+        derived = derive_phase_watts_from_currents(tuple(source_values), (10.0, 1.0, 0.5))
+
+        self.assertIsNotNone(derived)
+        self.assertAlmostEqual(derived[0], 2300.0, places=2)
+        self.assertAlmostEqual(derived[1], 231.0, places=2)
+        self.assertAlmostEqual(derived[2], 116.0, places=2)
+
+    def test_derive_phase_watts_from_currents_falls_back_to_default_voltage(self) -> None:
+        source_values = [0xFFFF] * INSTANTANEOUS_VALUES_REGISTER_LENGTH
+
+        derived = derive_phase_watts_from_currents(
+            tuple(source_values),
+            (1.0, 2.0, 3.0),
+            fallback_phase_voltage_volts=230.0,
+        )
+
+        self.assertIsNotNone(derived)
+        self.assertAlmostEqual(derived[0], 230.0, places=2)
+        self.assertAlmostEqual(derived[1], 460.0, places=2)
+        self.assertAlmostEqual(derived[2], 690.0, places=2)
+
     def test_decode_instantaneous_fields_treats_invalid_sentinel_words_as_none(self) -> None:
         source_values = [0] * INSTANTANEOUS_VALUES_REGISTER_LENGTH
         current_n_offset = 0x5B12 - INSTANTANEOUS_VALUES_REGISTER_ADDRESS
@@ -267,11 +303,11 @@ class MaxemHomeUsageTests(unittest.TestCase):
     def test_preview_basis_explains_instantaneous_power_semantics(self) -> None:
         message = describe_instantaneous_preview_basis()
 
-        self.assertIn("active_power_total/l1/l2/l3", message)
-        self.assertIn("0x5B14..0x5B1B", message)
+        self.assertIn("active_power_total (0x5B14/0x5B15)", message)
+        self.assertIn("CERBO_PHASE_POWER_SOURCE", message)
         self.assertIn("Ac/ActiveIn", message)
         self.assertIn("Ac/Out", message)
-        self.assertIn("clamped to >=0", message)
+        self.assertIn("non-negative clamp", message)
         self.assertIn("copied verbatim", message)
 
     def test_domoticz_client_parses_multi_idx_payload(self) -> None:

@@ -14,10 +14,12 @@ import serial
 
 from lib.register_maps import MAXEM_HOLDING_REGISTERS, VICTRON_HOLDING_REGISTERS
 from lib.maxem_home_usage import (
+    CerboMqttSnapshot,
     CerboMqttCache,
     CerboMqttPoller,
     INSTANTANEOUS_VALUES_REGISTER_NAME,
     describe_instantaneous_preview_basis,
+    derive_phase_watts_from_currents,
     format_instantaneous_diff_lines,
     format_instantaneous_preview_lines,
     preview_signature,
@@ -55,6 +57,13 @@ def _parse_bool_setting(name: str, default: str = "0") -> bool:
     return raw_value not in {"0", "false", "no", "off", ""}
 
 
+def _normalize_phase_power_source(value: str) -> str:
+    normalized = str(value).strip().lower()
+    if normalized in {"activein", "acout", "abb"}:
+        return normalized
+    return "activein"
+
+
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Modbus softsplit proxy")
     parser.add_argument(
@@ -84,6 +93,13 @@ MOSQUITTO_IP = _get_setting("MOSQUITTO_IP", "mosquitto.hs.mfis.net")
 MOSQUITTO_PORT = int(_get_setting("MOSQUITTO_PORT", "1883"))
 CERBO_AC_OUT_TOPIC = _get_setting("CERBO_AC_OUT_TOPIC", "N/48e7da878d35/vebus/276/Ac/Out")
 CERBO_AC_ACTIVEIN_TOPIC = _get_setting("CERBO_AC_ACTIVEIN_TOPIC", "N/48e7da878d35/vebus/276/Ac/ActiveIn")
+CERBO_PHASE_POWER_SOURCE = _normalize_phase_power_source(_get_setting("CERBO_PHASE_POWER_SOURCE", "activein"))
+CERBO_FORCE_NONNEGATIVE_PHASE_POWER = _parse_bool_setting("CERBO_FORCE_NONNEGATIVE_PHASE_POWER", "0")
+CERBO_COHERENT_PHASE_FRAMES = _parse_bool_setting("CERBO_COHERENT_PHASE_FRAMES", "1")
+CERBO_COHERENT_PHASE_FRAME_MAX_SKEW_SECONDS = max(
+    float(_get_setting("CERBO_COHERENT_PHASE_FRAME_MAX_SKEW_SECONDS", "1.5")),
+    0.0,
+)
 CERBO_MQTT_PROTOCOL_DEBUG = _parse_bool_setting("CERBO_MQTT_PROTOCOL_DEBUG", "0")
 CERBO_MQTT_SNAPSHOT_DEBUG_INTERVAL_SECONDS = max(
     float(_get_setting("CERBO_MQTT_SNAPSHOT_DEBUG_INTERVAL_SECONDS", "0.0")),
@@ -177,6 +193,8 @@ def _log_source_effective_config() -> None:
     logger.info(
         (
             "Cerbo MQTT source: host=%s(%s) port=%s(%s) ac_out_topic=%s(%s) ac_activein_topic=%s(%s) "
+            "phase_power_source=%s(%s) clamp_negative_phase_power=%s(%s) "
+            "coherent_phase_frames=%s(%s) coherent_phase_frame_max_skew_seconds=%.2f(%s) "
             "protocol_debug=%s(%s) snapshot_debug_interval_seconds=%.2f(%s)"
         ),
         MOSQUITTO_IP,
@@ -187,6 +205,14 @@ def _log_source_effective_config() -> None:
         _get_setting_source("CERBO_AC_OUT_TOPIC"),
         CERBO_AC_ACTIVEIN_TOPIC,
         _get_setting_source("CERBO_AC_ACTIVEIN_TOPIC"),
+        CERBO_PHASE_POWER_SOURCE,
+        _get_setting_source("CERBO_PHASE_POWER_SOURCE"),
+        int(CERBO_FORCE_NONNEGATIVE_PHASE_POWER),
+        _get_setting_source("CERBO_FORCE_NONNEGATIVE_PHASE_POWER"),
+        int(CERBO_COHERENT_PHASE_FRAMES),
+        _get_setting_source("CERBO_COHERENT_PHASE_FRAMES"),
+        CERBO_COHERENT_PHASE_FRAME_MAX_SKEW_SECONDS,
+        _get_setting_source("CERBO_COHERENT_PHASE_FRAME_MAX_SKEW_SECONDS"),
         int(CERBO_MQTT_PROTOCOL_DEBUG),
         _get_setting_source("CERBO_MQTT_PROTOCOL_DEBUG"),
         CERBO_MQTT_SNAPSHOT_DEBUG_INTERVAL_SECONDS,
@@ -197,6 +223,60 @@ def _log_source_effective_config() -> None:
             "CERBO_AC_OUT_TOPIC and CERBO_AC_ACTIVEIN_TOPIC are equal. "
             "This can corrupt register intent between current and active-power rewrites."
         )
+    if _get_setting("CERBO_PHASE_POWER_SOURCE", "activein").strip().lower() not in {"activein", "acout", "abb"}:
+        logger.warning(
+            "Unsupported CERBO_PHASE_POWER_SOURCE=%r; using 'activein'. "
+            "Supported values: activein, acout, abb.",
+            _get_setting("CERBO_PHASE_POWER_SOURCE", "activein"),
+        )
+
+
+def _resolve_phase_usage_watts_for_rewrite(
+    *,
+    source_values,
+    usage_snapshot,
+):
+    if usage_snapshot is None:
+        return None
+
+    if CERBO_PHASE_POWER_SOURCE == "abb":
+        phase_usage_watts = None
+    elif CERBO_PHASE_POWER_SOURCE == "acout":
+        phase_usage_watts = derive_phase_watts_from_currents(
+            source_values,
+            usage_snapshot.phase_current_amps,
+        )
+    else:
+        phase_usage_watts = usage_snapshot.phase_usage_watts
+
+    if phase_usage_watts is None:
+        return None
+    if CERBO_FORCE_NONNEGATIVE_PHASE_POWER:
+        return tuple(max(float(value), 0.0) for value in phase_usage_watts)
+    return tuple(float(value) for value in phase_usage_watts)
+
+
+def _allow_negative_phase_power_for_rewrite() -> bool:
+    if CERBO_FORCE_NONNEGATIVE_PHASE_POWER:
+        return False
+    return CERBO_PHASE_POWER_SOURCE == "activein"
+
+
+def _build_preview_snapshot_for_logging(
+    usage_snapshot,
+    phase_usage_watts,
+):
+    if usage_snapshot is None:
+        return None
+    if phase_usage_watts is None:
+        return usage_snapshot
+    return CerboMqttSnapshot(
+        sequence=getattr(usage_snapshot, "sequence", 0),
+        ac_in_phase_watts=tuple(float(value) for value in phase_usage_watts),
+        ac_in_total_watts=getattr(usage_snapshot, "rewrite_usage_watts", 0.0),
+        ac_out_phase_currents=getattr(usage_snapshot, "phase_current_amps", None),
+        ac_out_current_n=getattr(usage_snapshot, "current_n_amps", None),
+    )
 
 
 def main():
@@ -241,6 +321,8 @@ def main():
             cache=rewrite_cache,
             protocol_debug=CERBO_MQTT_PROTOCOL_DEBUG,
             snapshot_debug_interval_seconds=CERBO_MQTT_SNAPSHOT_DEBUG_INTERVAL_SECONDS,
+            coherent_phase_frames=CERBO_COHERENT_PHASE_FRAMES,
+            coherent_phase_frame_max_skew_seconds=CERBO_COHERENT_PHASE_FRAME_MAX_SKEW_SECONDS,
             logger=logger,
         )
         rewrite_poller.start()
@@ -320,9 +402,16 @@ def main():
                             usage_watts = preview_snapshot.rewrite_usage_watts if preview_snapshot else 0.0
                             if usage_watts is None:
                                 usage_watts = 0.0
-                            phase_usage_watts = preview_snapshot.phase_usage_watts if preview_snapshot else None
+                            phase_usage_watts = _resolve_phase_usage_watts_for_rewrite(
+                                source_values=acload_values,
+                                usage_snapshot=preview_snapshot,
+                            )
                             phase_current_amps = preview_snapshot.phase_current_amps if preview_snapshot else None
                             current_n_amps = preview_snapshot.current_n_amps if preview_snapshot else None
+                            preview_display_snapshot = _build_preview_snapshot_for_logging(
+                                preview_snapshot,
+                                phase_usage_watts,
+                            )
                             rewritten_values = rewrite_instantaneous_values(
                                 acload_values,
                                 usage_watts=usage_watts,
@@ -330,16 +419,16 @@ def main():
                                 phase_current_amps=phase_current_amps,
                                 current_n_amps=current_n_amps,
                                 allow_negative=True,
-                                allow_negative_phase=True,
+                                allow_negative_phase=_allow_negative_phase_power_for_rewrite(),
                             )
                             preview_signature_value = preview_signature(
                                 capture,
-                                snapshot=preview_snapshot,
+                                snapshot=preview_display_snapshot,
                             )
                             if preview_signature_value != last_preview_signatures.get((capture.target_slave, capture.source_slave, capture.register_name)):
                                 for preview_line in format_instantaneous_preview_lines(
                                     capture,
-                                    snapshot=preview_snapshot,
+                                    snapshot=preview_display_snapshot,
                                 ):
                                     logger.debug(preview_line)
                                 if trace_instantaneous_payload:
@@ -364,9 +453,16 @@ def main():
                                 usage_watts = usage_snapshot.rewrite_usage_watts if usage_snapshot else 0.0
                                 if usage_watts is None:
                                     usage_watts = 0.0
-                                phase_usage_watts = usage_snapshot.phase_usage_watts if usage_snapshot else None
+                                phase_usage_watts = _resolve_phase_usage_watts_for_rewrite(
+                                    source_values=acload_values,
+                                    usage_snapshot=usage_snapshot,
+                                )
                                 phase_current_amps = usage_snapshot.phase_current_amps if usage_snapshot else None
                                 current_n_amps = usage_snapshot.current_n_amps if usage_snapshot else None
+                                live_preview_snapshot = _build_preview_snapshot_for_logging(
+                                    usage_snapshot,
+                                    phase_usage_watts,
+                                )
                                 rewritten_values = rewrite_instantaneous_values(
                                     acload_values,
                                     usage_watts=usage_watts,
@@ -374,16 +470,16 @@ def main():
                                     phase_current_amps=phase_current_amps,
                                     current_n_amps=current_n_amps,
                                     allow_negative=True,
-                                    allow_negative_phase=True,
+                                    allow_negative_phase=_allow_negative_phase_power_for_rewrite(),
                                 )
                                 live_preview_signature = preview_signature(
                                     capture,
-                                    snapshot=usage_snapshot,
+                                    snapshot=live_preview_snapshot,
                                 )
                                 if live_preview_signature != last_preview_signatures.get((capture.target_slave, capture.source_slave, capture.register_name)):
                                     for preview_line in format_instantaneous_preview_lines(
                                         capture,
-                                        snapshot=usage_snapshot,
+                                        snapshot=live_preview_snapshot,
                                     ):
                                         logger.debug(preview_line)
                                     if trace_instantaneous_payload:

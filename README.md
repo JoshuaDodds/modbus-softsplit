@@ -52,6 +52,12 @@ your specific situation.
   - `active_power_total/l1/l2/l3` (`0x5B14..0x5B1B`) are sourced from `Ac/ActiveIn` phase watts.
   - `current_l1/l2/l3/n` (`0x5B0C..0x5B13`) are sourced from `Ac/Out` phase currents.
   - `Ac/ActiveIn` values may be positive or negative; `Ac/Out` currents are clamped to non-negative values.
+  - `CERBO_PHASE_POWER_SOURCE` can pivot phase-power behavior without code edits:
+    - `activein` keeps signed grid semantics from `Ac/ActiveIn`.
+    - `acout` derives phase watts from ABB phase voltages and Cerbo `Ac/Out` phase currents.
+    - `abb` leaves phase-power words unchanged from ABB passthrough.
+  - `CERBO_COHERENT_PHASE_FRAMES=1` publishes snapshots only after complete 3-phase updates for both
+    `Ac/ActiveIn` and `Ac/Out`, reducing mixed-time phase combinations.
   This keeps Maxem home/grid power semantics aligned with grid import/export while preserving AC-out current safety inputs
   used for EV phase protection.
 - The dry-run logger prints one semantic line before the preview values so it is obvious that the preview is the

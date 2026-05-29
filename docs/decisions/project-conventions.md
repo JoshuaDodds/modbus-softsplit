@@ -15,10 +15,19 @@ operator-facing assumptions for `modbus-softsplit`.
 - Power rewrite source:
   - `Ac/ActiveIn/L1|L2|L3/P` -> active power total + per phase words.
   - Values may be positive or negative.
+- `CERBO_PHASE_POWER_SOURCE` controls phase-power words (`0x5B16..0x5B1B`):
+  - `activein` -> phase power from Cerbo `Ac/ActiveIn` (signed).
+  - `acout` -> phase power derived from ABB phase voltages and Cerbo `Ac/Out` currents.
+  - `abb` -> phase power passthrough from ABB (no rewrite on phase words).
+- `CERBO_FORCE_NONNEGATIVE_PHASE_POWER=1` clamps rewritten phase-power values to `>=0`.
 - Current rewrite source:
   - `Ac/Out/L1|L2|L3/I` -> phase current words.
   - `Ac/Out/N/I` -> neutral current word when present.
   - AC-out currents are clamped to `>= 0` before encoding.
+- `CERBO_COHERENT_PHASE_FRAMES=1` requires full 3-phase refresh for both power and current
+  inputs before publishing a new rewrite snapshot.
+- `CERBO_COHERENT_PHASE_FRAME_MAX_SKEW_SECONDS` bounds acceptable timestamp skew across
+  phase updates to reduce mixed-time phase combinations.
 - The ABB target register block is `instantaneous_values`.
 - Rewritten words in that block are:
   - `0x5B0C/0x5B0D`, `0x5B0E/0x5B0F`, `0x5B10/0x5B11`, `0x5B12/0x5B13`
