@@ -40,6 +40,16 @@ def _get_setting(name, default=None):
     return value
 
 
+def _get_setting_source(name: str) -> str:
+    env_value = os.environ.get(name)
+    if env_value not in (None, ""):
+        return "env"
+    dotenv_value = _DOTENV.get(name)
+    if dotenv_value not in (None, ""):
+        return ".env"
+    return "default"
+
+
 def _parse_bool_setting(name: str, default: str = "0") -> bool:
     raw_value = str(_get_setting(name, default)).strip().lower()
     return raw_value not in {"0", "false", "no", "off", ""}
@@ -90,12 +100,13 @@ DOMOTICZ_USAGE_POLL_INTERVAL_SECONDS = float(
     _get_setting("DOMOTICZ_USAGE_POLL_INTERVAL_SECONDS", "5.0")
 )
 DOMOTICZ_PHASE_L1_IDX = int(_get_setting("DOMOTICZ_PHASE_L1_IDX", "26"))
-DOMOTICZ_PHASE_L2_IDX = int(_get_setting("DOMOTICZ_PHASE_L2_IDX", "25"))
-DOMOTICZ_PHASE_L3_IDX = int(_get_setting("DOMOTICZ_PHASE_L3_IDX", "24"))
+DOMOTICZ_PHASE_L2_IDX = int(_get_setting("DOMOTICZ_PHASE_L2_IDX", "24"))
+DOMOTICZ_PHASE_L3_IDX = int(_get_setting("DOMOTICZ_PHASE_L3_IDX", "25"))
 DOMOTICZ_PHASE_EXPORT_L1_IDX = _parse_optional_int_setting("DOMOTICZ_PHASE_EXPORT_L1_IDX", "32")
 DOMOTICZ_PHASE_EXPORT_L2_IDX = _parse_optional_int_setting("DOMOTICZ_PHASE_EXPORT_L2_IDX", "31")
 DOMOTICZ_PHASE_EXPORT_L3_IDX = _parse_optional_int_setting("DOMOTICZ_PHASE_EXPORT_L3_IDX", "33")
 DOMOTICZ_USE_SIGNED_NET_POWER = _parse_bool_setting("DOMOTICZ_USE_SIGNED_NET_POWER", "1")
+DOMOTICZ_USE_SIGNED_NET_PHASE_POWER = _parse_bool_setting("DOMOTICZ_USE_SIGNED_NET_PHASE_POWER", "0")
 LOG_LEVEL_NAME = str(_get_setting("LOG_LEVEL", "INFO")).strip().upper()
 LOG_LEVEL = getattr(logger, LOG_LEVEL_NAME, logger.INFO)
 STATUS_LOG_INTERVAL_SECONDS = max(float(_get_setting("STATUS_LOG_INTERVAL_SECONDS", "30.0")), 0.0)
@@ -180,6 +191,49 @@ def _stop_runtime(
         tcp_master.close()
 
 
+def _log_domoticz_effective_config() -> None:
+    logger.info(
+        (
+            "Domoticz effective mapping: grid_idx=%s(%s) phase_import_idx[L1,L2,L3]=[%s,%s,%s](%s,%s,%s) "
+            "phase_export_idx[L1,L2,L3]=[%s,%s,%s](%s,%s,%s) signed_total=%s(%s) signed_phase=%s(%s)"
+        ),
+        DOMOTICZ_GRID_IDX,
+        _get_setting_source("DOMOTICZ_GRID_IDX"),
+        DOMOTICZ_PHASE_L1_IDX,
+        DOMOTICZ_PHASE_L2_IDX,
+        DOMOTICZ_PHASE_L3_IDX,
+        _get_setting_source("DOMOTICZ_PHASE_L1_IDX"),
+        _get_setting_source("DOMOTICZ_PHASE_L2_IDX"),
+        _get_setting_source("DOMOTICZ_PHASE_L3_IDX"),
+        DOMOTICZ_PHASE_EXPORT_L1_IDX,
+        DOMOTICZ_PHASE_EXPORT_L2_IDX,
+        DOMOTICZ_PHASE_EXPORT_L3_IDX,
+        _get_setting_source("DOMOTICZ_PHASE_EXPORT_L1_IDX"),
+        _get_setting_source("DOMOTICZ_PHASE_EXPORT_L2_IDX"),
+        _get_setting_source("DOMOTICZ_PHASE_EXPORT_L3_IDX"),
+        int(DOMOTICZ_USE_SIGNED_NET_POWER),
+        _get_setting_source("DOMOTICZ_USE_SIGNED_NET_POWER"),
+        int(DOMOTICZ_USE_SIGNED_NET_PHASE_POWER),
+        _get_setting_source("DOMOTICZ_USE_SIGNED_NET_PHASE_POWER"),
+    )
+
+    phase_indices = (DOMOTICZ_PHASE_L1_IDX, DOMOTICZ_PHASE_L2_IDX, DOMOTICZ_PHASE_L3_IDX)
+    if any(phase_idx == DOMOTICZ_GRID_IDX for phase_idx in phase_indices):
+        logger.warning(
+            "One or more phase import IDX values match DOMOTICZ_GRID_IDX=%s. "
+            "This can cause a phase to mirror grid totals instead of AC-load phase values.",
+            DOMOTICZ_GRID_IDX,
+        )
+    if len(set(phase_indices)) != len(phase_indices):
+        logger.warning(
+            "Duplicate phase import IDX values detected (L1=%s, L2=%s, L3=%s). "
+            "This can cause phase attribution errors on Maxem.",
+            DOMOTICZ_PHASE_L1_IDX,
+            DOMOTICZ_PHASE_L2_IDX,
+            DOMOTICZ_PHASE_L3_IDX,
+        )
+
+
 def main():
     args = _parse_args()
     dry_run_maxem_home = args.dry_run_maxem_home
@@ -211,13 +265,17 @@ def main():
 
         tcp_slave_server.start()
         logger.info(f"Modbus TCP slave server started...")
+        _log_domoticz_effective_config()
 
         domoticz_client = DomoticzClient(
             DOMOTICZ_URL,
             DOMOTICZ_GRID_IDX,
             timeout_seconds=DOMOTICZ_TIMEOUT_SECONDS,
         )
-        usage_cache = DomoticzUsageCache(use_signed_net_power=DOMOTICZ_USE_SIGNED_NET_POWER)
+        usage_cache = DomoticzUsageCache(
+            use_signed_net_power=DOMOTICZ_USE_SIGNED_NET_POWER,
+            use_signed_net_phase_power=DOMOTICZ_USE_SIGNED_NET_PHASE_POWER,
+        )
         usage_poller = DomoticzUsagePoller(
             domoticz_client,
             usage_cache,
@@ -228,6 +286,7 @@ def main():
             phase_export_l2_idx=DOMOTICZ_PHASE_EXPORT_L2_IDX,
             phase_export_l3_idx=DOMOTICZ_PHASE_EXPORT_L3_IDX,
             use_signed_net_power=DOMOTICZ_USE_SIGNED_NET_POWER,
+            use_signed_net_phase_power=DOMOTICZ_USE_SIGNED_NET_PHASE_POWER,
             poll_interval_seconds=DOMOTICZ_USAGE_POLL_INTERVAL_SECONDS,
             logger=logger,
         )
@@ -314,6 +373,7 @@ def main():
                                 usage_watts=usage_watts,
                                 phase_usage_watts=phase_usage_watts,
                                 allow_negative=DOMOTICZ_USE_SIGNED_NET_POWER,
+                                allow_negative_phase=DOMOTICZ_USE_SIGNED_NET_PHASE_POWER,
                             )
                             preview_signature_value = preview_signature(
                                 capture,
@@ -352,6 +412,7 @@ def main():
                                     usage_watts=usage_watts,
                                     phase_usage_watts=phase_usage_watts,
                                     allow_negative=DOMOTICZ_USE_SIGNED_NET_POWER,
+                                    allow_negative_phase=DOMOTICZ_USE_SIGNED_NET_PHASE_POWER,
                                 )
                                 live_preview_signature = preview_signature(
                                     capture,

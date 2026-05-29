@@ -88,6 +88,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             phase_usage_watts=phase_usage_watts,
             use_signed_net_power=replay_snapshot.use_signed_net_power,
+            use_signed_net_phase_power=replay_snapshot.use_signed_net_phase_power,
         )
     if usage_watts is None:
         usage_watts = 0.0
@@ -97,6 +98,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         usage_watts=usage_watts,
         phase_usage_watts=phase_usage_watts,
         allow_negative=preview_snapshot.use_signed_net_power,
+        allow_negative_phase=preview_snapshot.use_signed_net_phase_power,
     )
 
     print(describe_instantaneous_preview_basis())

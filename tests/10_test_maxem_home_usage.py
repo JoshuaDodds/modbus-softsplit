@@ -118,6 +118,25 @@ class MaxemHomeUsageTests(unittest.TestCase):
         changed_words = changed_instantaneous_words(source_values, rewritten)
         self.assertEqual(changed_words, [0x5B14, 0x5B15, 0x5B16, 0x5B17, 0x5B18, 0x5B19, 0x5B1A, 0x5B1B])
 
+    def test_instantaneous_rewrite_can_use_signed_total_with_unsigned_phase_values(self) -> None:
+        source_values = [0] * INSTANTANEOUS_VALUES_REGISTER_LENGTH
+        rewritten = rewrite_instantaneous_values(
+            tuple(source_values),
+            usage_watts=-50.0,
+            phase_usage_watts=(-10.0, 20.0, -30.0),
+            allow_negative=True,
+            allow_negative_phase=False,
+        )
+
+        phase_l1_offset = INSTANTANEOUS_ACTIVE_POWER_L1_REGISTER_ADDRESS - INSTANTANEOUS_VALUES_REGISTER_ADDRESS
+        phase_l2_offset = INSTANTANEOUS_ACTIVE_POWER_L2_REGISTER_ADDRESS - INSTANTANEOUS_VALUES_REGISTER_ADDRESS
+        phase_l3_offset = INSTANTANEOUS_ACTIVE_POWER_L3_REGISTER_ADDRESS - INSTANTANEOUS_VALUES_REGISTER_ADDRESS
+
+        self.assertAlmostEqual(decode_signed_scaled_watts(rewritten), -50.0, places=2)
+        self.assertAlmostEqual(decode_signed_scaled_watts(rewritten, offset=phase_l1_offset), 0.0, places=2)
+        self.assertAlmostEqual(decode_signed_scaled_watts(rewritten, offset=phase_l2_offset), 20.0, places=2)
+        self.assertAlmostEqual(decode_signed_scaled_watts(rewritten, offset=phase_l3_offset), 0.0, places=2)
+
     def test_decode_instantaneous_fields_extracts_expected_values(self) -> None:
         source_values = [0] * INSTANTANEOUS_VALUES_REGISTER_LENGTH
 
@@ -199,8 +218,9 @@ class MaxemHomeUsageTests(unittest.TestCase):
         self.assertIn("ABB instantaneous active power total", message)
         self.assertIn("0x5B14/0x5B15", message)
         self.assertIn("DOMOTICZ_USE_SIGNED_NET_POWER=1", message)
+        self.assertIn("DOMOTICZ_USE_SIGNED_NET_PHASE_POWER=1", message)
         self.assertIn("Usage-UsageDeliv", message)
-        self.assertIn("When disabled", message)
+        self.assertIn("When DOMOTICZ_USE_SIGNED_NET_POWER=0", message)
         self.assertIn("copied verbatim", message)
 
     def test_domoticz_client_parses_multi_idx_payload(self) -> None:
@@ -286,6 +306,7 @@ class MaxemHomeUsageTests(unittest.TestCase):
             phase_export_l2_idx=31,
             phase_export_l3_idx=33,
             use_signed_net_power=True,
+            use_signed_net_phase_power=True,
             poll_interval_seconds=0.1,
         )
 
@@ -302,6 +323,73 @@ class MaxemHomeUsageTests(unittest.TestCase):
         self.assertAlmostEqual(snapshot.phase_usage_watts[0], 1439.24, places=2)
         self.assertAlmostEqual(snapshot.phase_usage_watts[1], 1204.30, places=2)
         self.assertAlmostEqual(snapshot.phase_usage_watts[2], 1881.40, places=2)
+
+    def test_usage_poller_defaults_to_import_only_phase_values(self) -> None:
+        class _FakeBatchClient:
+            enabled = True
+            grid_idx = 20
+
+            def __init__(self) -> None:
+                import threading
+
+                self.called = threading.Event()
+
+            def fetch_devices(self, rids):
+                self.called.set()
+                return {
+                    20: {
+                        "idx": "20",
+                        "Counter": "64989.818",
+                        "CounterDeliv": "6787.095",
+                        "Usage": "87 Watt",
+                        "UsageDeliv": "15 Watt",
+                    },
+                    26: {"idx": "26", "Data": "100.00 W"},
+                    25: {"idx": "25", "Data": "200.00 W"},
+                    24: {"idx": "24", "Data": "300.00 W"},
+                    32: {"idx": "32", "Data": "90.00 W"},
+                    31: {"idx": "31", "Data": "190.00 W"},
+                    33: {"idx": "33", "Data": "290.00 W"},
+                }
+
+            @staticmethod
+            def url_for_indices(rids):
+                return "http://example.invalid/json.htm?type=devices&rid=" + ",".join(str(int(value)) for value in rids)
+
+            @staticmethod
+            def data_watts_from_device(candidate):
+                return float(str(candidate["Data"]).split()[0])
+
+            @staticmethod
+            def fetch_reading_from_device(candidate):
+                return DomoticzReading.from_payload({"result": [candidate]})
+
+        fake_client = _FakeBatchClient()
+        cache = DomoticzUsageCache(use_signed_net_power=True, use_signed_net_phase_power=False)
+        poller = DomoticzUsagePoller(
+            fake_client,  # type: ignore[arg-type]
+            cache,
+            phase_l1_idx=26,
+            phase_l2_idx=25,
+            phase_l3_idx=24,
+            phase_export_l1_idx=32,
+            phase_export_l2_idx=31,
+            phase_export_l3_idx=33,
+            use_signed_net_power=True,
+            use_signed_net_phase_power=False,
+            poll_interval_seconds=0.1,
+        )
+
+        poller.start()
+        self.assertTrue(fake_client.called.wait(timeout=1.0))
+        poller.stop()
+        poller.join(timeout=1.0)
+
+        snapshot = cache.snapshot()
+        self.assertIsNotNone(snapshot.phase_usage_watts)
+        self.assertAlmostEqual(snapshot.phase_usage_watts[0], 100.0, places=2)
+        self.assertAlmostEqual(snapshot.phase_usage_watts[1], 200.0, places=2)
+        self.assertAlmostEqual(snapshot.phase_usage_watts[2], 300.0, places=2)
 
 
 if __name__ == "__main__":

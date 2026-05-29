@@ -11,8 +11,13 @@ operator-facing assumptions for `modbus-softsplit`.
   computed as `Usage - UsageDeliv` from `IDX 20`.
 - With `DOMOTICZ_USE_SIGNED_NET_POWER=0`, rewrite total watts use non-negative
   `Usage` import-only behavior.
+- With `DOMOTICZ_USE_SIGNED_NET_PHASE_POWER=0` (default), per-phase rewrite
+  watts stay import-only to preserve AC-load behavior for Maxem fuse-protection
+  logic.
+- With `DOMOTICZ_USE_SIGNED_NET_PHASE_POWER=1`, per-phase rewrite watts use
+  signed net values (phase import minus phase export).
 - The Maxem rewrite path also uses Domoticz per-phase `result.Data` readings:
-  import from `rid=26` (L1), `rid=25` (L2), and `rid=24` (L3), plus export
+  import from `rid=26` (L1), `rid=24` (L2), and `rid=25` (L3), plus export
   from `rid=32` (L1), `rid=31` (L2), and `rid=33` (L3) when signed-net mode is enabled.
 - House load is ignored for the Maxem rewrite path.
 - The ABB target register block is `instantaneous_values`.
@@ -60,6 +65,9 @@ operator-facing assumptions for `modbus-softsplit`.
 - Batch-request visibility should remain debug-only (`Domoticz batch request:
   ...`) so operators can verify URL/IDX composition without adding info-level
   log noise.
+- Startup should log effective Domoticz mapping values and source precedence
+  (`env` vs `.env` vs defaults) and warn when phase IDX values collide with
+  grid IDX or with each other.
 - The serving loop should remain timing-safe for the RTU client.
 - High-volume loop status logs should be periodic instead of per-cycle to avoid
   unnecessary log I/O overhead (`STATUS_LOG_INTERVAL_SECONDS`, default `30`).

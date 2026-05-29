@@ -61,6 +61,7 @@ class DomoticzUsageSnapshot:
     reading: DomoticzReading | None
     phase_usage_watts: tuple[float, float, float] | None = None
     use_signed_net_power: bool = False
+    use_signed_net_phase_power: bool = False
 
     @property
     def grid_import_watts(self) -> float | None:
@@ -88,12 +89,18 @@ class DomoticzUsageSnapshot:
 
 
 class DomoticzUsageCache:
-    def __init__(self, *, use_signed_net_power: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        use_signed_net_power: bool = False,
+        use_signed_net_phase_power: bool = False,
+    ) -> None:
         self._lock = threading.Lock()
         self._sequence = 0
         self._reading: DomoticzReading | None = None
         self._phase_usage_watts: tuple[float, float, float] | None = None
         self._use_signed_net_power = bool(use_signed_net_power)
+        self._use_signed_net_phase_power = bool(use_signed_net_phase_power)
 
     def update(
         self,
@@ -111,6 +118,7 @@ class DomoticzUsageCache:
                 reading=self._reading,
                 phase_usage_watts=self._phase_usage_watts,
                 use_signed_net_power=self._use_signed_net_power,
+                use_signed_net_phase_power=self._use_signed_net_phase_power,
             )
 
     def snapshot(self) -> DomoticzUsageSnapshot:
@@ -120,6 +128,7 @@ class DomoticzUsageCache:
                 reading=self._reading,
                 phase_usage_watts=self._phase_usage_watts,
                 use_signed_net_power=self._use_signed_net_power,
+                use_signed_net_phase_power=self._use_signed_net_phase_power,
             )
 
 
@@ -130,12 +139,13 @@ class DomoticzUsagePoller(threading.Thread):
         cache: DomoticzUsageCache,
         *,
         phase_l1_idx: int = 26,
-        phase_l2_idx: int = 25,
-        phase_l3_idx: int = 24,
+        phase_l2_idx: int = 24,
+        phase_l3_idx: int = 25,
         phase_export_l1_idx: int | None = None,
         phase_export_l2_idx: int | None = None,
         phase_export_l3_idx: int | None = None,
         use_signed_net_power: bool = False,
+        use_signed_net_phase_power: bool = False,
         poll_interval_seconds: float = 5.0,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -153,6 +163,7 @@ class DomoticzUsagePoller(threading.Thread):
             self._normalize_optional_idx(phase_export_l3_idx),
         )
         self._use_signed_net_power = bool(use_signed_net_power)
+        self._use_signed_net_phase_power = bool(use_signed_net_phase_power)
         self._poll_interval_seconds = max(poll_interval_seconds, 0.1)
         self._logger = logger or logging.getLogger(__name__)
         self._stop_event = threading.Event()
@@ -178,7 +189,7 @@ class DomoticzUsagePoller(threading.Thread):
 
     def _build_requested_indices(self) -> tuple[int, ...]:
         indices = [self._client.grid_idx, *self._phase_import_indices]
-        if self._use_signed_net_power and self._has_phase_export_indices():
+        if self._use_signed_net_phase_power and self._has_phase_export_indices():
             indices.extend(int(value) for value in self._phase_export_indices if value is not None)
         return tuple(indices)
 
@@ -202,7 +213,7 @@ class DomoticzUsagePoller(threading.Thread):
                     for phase_idx in self._phase_import_indices
                 )
                 phase_usage_watts = phase_import_watts
-                if self._use_signed_net_power:
+                if self._use_signed_net_phase_power:
                     if self._has_phase_export_indices():
                         phase_export_watts = tuple(
                             self._client.data_watts_from_device(devices[phase_idx])
@@ -215,7 +226,7 @@ class DomoticzUsagePoller(threading.Thread):
                         )
                     elif not self._warned_missing_phase_export_indices:
                         self._logger.warning(
-                            "DOMOTICZ_USE_SIGNED_NET_POWER is enabled but one or more DOMOTICZ_PHASE_EXPORT_*_IDX values are missing; "
+                            "DOMOTICZ_USE_SIGNED_NET_PHASE_POWER is enabled but one or more DOMOTICZ_PHASE_EXPORT_*_IDX values are missing; "
                             "falling back to unsigned phase import values."
                         )
                         self._warned_missing_phase_export_indices = True
@@ -223,12 +234,13 @@ class DomoticzUsagePoller(threading.Thread):
                 snapshot = self._cache.update(reading, phase_usage_watts=phase_usage_watts)
                 self._logger.debug(
                     (
-                        "Domoticz usage snapshot updated: sequence=%s signed_net_power=%s "
+                        "Domoticz usage snapshot updated: sequence=%s signed_total=%s signed_phase=%s "
                         "grid_import_watts=%.0f grid_export_watts=%.0f grid_rewrite_watts=%.0f "
                         "phase_watts=(%.0f, %.0f, %.0f)"
                     ),
                     snapshot.sequence,
                     int(snapshot.use_signed_net_power),
+                    int(self._use_signed_net_phase_power),
                     max(reading.import_watts, 0.0),
                     max(reading.export_watts, 0.0),
                     snapshot.rewrite_usage_watts or 0.0,
@@ -259,9 +271,10 @@ def _format_value(value: float | None, unit: str) -> str:
 def describe_instantaneous_preview_basis() -> str:
     return (
         "Preview basis: ABB instantaneous active power total lives in 0x5B14/0x5B15 as a signed 0.01 W register. "
-        "When DOMOTICZ_USE_SIGNED_NET_POWER=1, we encode signed net watts (Usage-UsageDeliv) for active_power_total "
-        "and signed per-phase net watts (phase import minus phase export indices) for active_power_l1/l2/l3. "
-        "When disabled, we encode non-negative grid import Usage and non-negative phase import values. "
+        "When DOMOTICZ_USE_SIGNED_NET_POWER=1, we encode signed net watts (Usage-UsageDeliv) for active_power_total. "
+        "For phases, DOMOTICZ_USE_SIGNED_NET_PHASE_POWER=1 enables signed per-phase net watts "
+        "(phase import minus phase export indices); when disabled we encode non-negative phase import values. "
+        "When DOMOTICZ_USE_SIGNED_NET_POWER=0, total uses non-negative grid import Usage. "
         "All other registers in instantaneous_values are copied verbatim from the ABB source. House load is ignored."
     )
 
@@ -341,6 +354,7 @@ def rewrite_instantaneous_values(
     usage_watts: float,
     phase_usage_watts: tuple[float, float, float] | None = None,
     allow_negative: bool = False,
+    allow_negative_phase: bool | None = None,
 ) -> tuple[int, ...]:
     values = list(int(value) & 0xFFFF for value in source_values)
     if len(values) < INSTANTANEOUS_ACTIVE_POWER_TOTAL_OFFSET + INSTANTANEOUS_ACTIVE_POWER_TOTAL_REGISTER_LENGTH:
@@ -350,13 +364,14 @@ def rewrite_instantaneous_values(
     values[INSTANTANEOUS_ACTIVE_POWER_TOTAL_OFFSET] = high_word
     values[INSTANTANEOUS_ACTIVE_POWER_TOTAL_OFFSET + 1] = low_word
 
+    phase_allow_negative = allow_negative if allow_negative_phase is None else bool(allow_negative_phase)
     if phase_usage_watts is not None:
         for phase_index, phase_offset in enumerate(INSTANTANEOUS_ACTIVE_POWER_PHASE_OFFSETS):
             if len(values) < phase_offset + INSTANTANEOUS_ACTIVE_POWER_PHASE_LENGTH:
                 continue
             phase_high_word, phase_low_word = encode_signed_scaled_watts(
                 phase_usage_watts[phase_index],
-                allow_negative=allow_negative,
+                allow_negative=phase_allow_negative,
             )
             values[phase_offset] = phase_high_word
             values[phase_offset + 1] = phase_low_word

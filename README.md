@@ -48,9 +48,12 @@ your specific situation.
   `ABB source: X W`, `DZ Usage to Maxem: Y W`, and `DZ Phase Watts to Maxem: L1=..., L2=..., L3=...`.
   These lines are emitted at `DEBUG` level (set `LOG_LEVEL=DEBUG` when you want them).
 - The corrected v1 story rewrites only ABB `instantaneous_values` active-power fields while mirroring all other words
-  verbatim. By default (`DOMOTICZ_USE_SIGNED_NET_POWER=1`) we encode signed net watts into ABB-compatible registers:
-  total uses `IDX 20 Usage-UsageDeliv`, and phases use per-phase import-export from `rid=26/25/24` minus `rid=32/31/33`
-  into `0x5B14/0x5B15` (total), `0x5B16/0x5B17` (L1), `0x5B18/0x5B19` (L2), and `0x5B1A/0x5B1B` (L3).
+  verbatim. By default (`DOMOTICZ_USE_SIGNED_NET_POWER=1`) we encode signed net watts for total into ABB-compatible registers:
+  total uses `IDX 20 Usage-UsageDeliv`. Phase rewrites are controlled independently by
+  `DOMOTICZ_USE_SIGNED_NET_PHASE_POWER` and default to import-only AC-load values.
+  Current phase import mapping defaults to `rid=26/24/25` for `L1/L2/L3`; optional phase export mapping remains `rid=32/31/33`.
+  When phase signed-net mode is enabled, phases use import-export; otherwise they stay import-only.
+  Rewrites are encoded into `0x5B14/0x5B15` (total), `0x5B16/0x5B17` (L1), `0x5B18/0x5B19` (L2), and `0x5B1A/0x5B1B` (L3).
   House load is not forwarded to Maxem. The earlier cumulative-counter preview was a prototype interpretation and is deprecated.
 - The dry-run logger prints one semantic line before the preview values so it is obvious that the preview is the
   ABB instantaneous power register being rewritten from Domoticz `Usage`.
@@ -59,7 +62,7 @@ your specific situation.
 - Preview semantics are simple:
   - `ABB source` is the decoded instantaneous active-power total from ABB.
   - `DZ Usage to Maxem` is the rewrite total watts (signed net by default, import-only when `DOMOTICZ_USE_SIGNED_NET_POWER=0`).
-  - `DZ Phase Watts to Maxem` are per-phase rewrite watts (import-export by default, import-only when signed-net mode is disabled).
+  - `DZ Phase Watts to Maxem` are per-phase rewrite watts (import-only by default, import-export when `DOMOTICZ_USE_SIGNED_NET_PHASE_POWER=1`).
 - Core application modules now live under `lib/` so the repo root stays focused on the entrypoint, tools,
   and docs.
 
@@ -83,6 +86,8 @@ your specific situation.
   to reduce HTTP overhead and timing jitter.
 - At `DEBUG` level the poller logs the exact batched Domoticz URL each cycle (`Domoticz batch request: ...`) so you can
   verify the single-request behavior in both live and dry-run modes.
+- Startup logs now print the effective Domoticz phase mapping (and whether values came from `env`, `.env`, or defaults),
+  plus warnings for duplicate phase IDX values or phase IDX collisions with grid IDX.
 - `LOG_LEVEL` defaults to `INFO`; set `LOG_LEVEL=DEBUG` to show preview lines (`ABB source` / `DZ ... to Maxem`).
 - The main loop now handles `Ctrl-C` cleanly in one interrupt and stops the poller and servers without a traceback.
 - Canonical project-specific runtime rules and durable decisions live in
