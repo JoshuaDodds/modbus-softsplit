@@ -46,6 +46,7 @@ your specific situation.
 - You can also set `DRY_RUN_MAXEM_HOME=1` in `.env` to make dry-run the default without changing service/unit args.
 - In dry-run mode the Maxem preview is intentionally short and easy to compare against dashboards:
   `ABB source: X W`, `Cerbo Usage to Maxem: Y W`, and `Cerbo Phase Watts to Maxem: L1=..., L2=..., L3=...`.
+  When PV slave emulation is enabled, dry-run also logs `Cerbo PV to Maxem (slave 001): ...`.
   These lines are emitted at `DEBUG` level (set `LOG_LEVEL=DEBUG` when you want them).
 - The active rewrite story now reads directly from Victron CerboGX MQTT (read-only) and rewrites selected words in
   ABB `instantaneous_values` while mirroring all other words verbatim.
@@ -60,6 +61,12 @@ your specific situation.
     - `abb` leaves phase-power words unchanged from ABB passthrough.
   - `CERBO_COHERENT_PHASE_FRAMES=1` publishes snapshots only after complete 3-phase updates for both
     `Ac/ActiveIn` and `Ac/Out`, reducing mixed-time phase combinations.
+  - Optional virtual PV meter emulation for Maxem slave `001` is available via:
+    - `CERBO_ENABLE_PV_SLAVE=1`
+    - `CERBO_PV_TARGET_SLAVE=1`
+    - `CERBO_PV_TOPICS=<comma-separated topic list>`
+    The PV total is summed from those topics and written to the `instantaneous_values` active-power words on slave `001`.
+    Phase power/current words for slave `001` are synthesized coherently from that total (equal split by phase, amps from ABB phase voltage).
   This keeps Maxem home/grid power semantics aligned with grid import/export while preserving AC-out current safety inputs
   used for EV phase protection.
 - The dry-run logger prints one semantic line before the preview values so it is obvious that the preview is the
@@ -93,6 +100,7 @@ your specific situation.
 - Cerbo MQTT poller is read-only and subscribes to:
   - `CERBO_AC_OUT_TOPIC` (default `N/48e7da878d35/vebus/276/Ac/Out`)
   - `CERBO_AC_ACTIVEIN_TOPIC` (default `N/48e7da878d35/vebus/276/Ac/ActiveIn`)
+  - `CERBO_PV_TOPICS` (default: three configured `solarcharger/.../Pv/.../P` topics; summed for virtual PV meter power)
 - At `DEBUG` level the runtime logs snapshot updates from MQTT and preview lines (`ABB source` / `Cerbo ... to Maxem`).
 - To keep DEBUG readable by default:
   - `CERBO_MQTT_PROTOCOL_DEBUG=0` suppresses raw paho wire logs (`Sending CONNECT`, `Received PUBLISH`, etc).

@@ -19,11 +19,13 @@ from lib.maxem_home_usage import (
     CerboMqttPoller,
     INSTANTANEOUS_VALUES_REGISTER_NAME,
     describe_instantaneous_preview_basis,
+    split_total_watts_evenly,
     derive_phase_watts_from_currents,
     format_instantaneous_diff_lines,
     format_instantaneous_preview_lines,
     net_signed_phase_watts_to_nonnegative_import,
     preview_signature,
+    rewrite_pv_instantaneous_values,
     rewrite_instantaneous_values,
 )
 from lib.synthetic_home import RegisterCapture
@@ -56,6 +58,12 @@ def _get_setting_source(name: str) -> str:
 def _parse_bool_setting(name: str, default: str = "0") -> bool:
     raw_value = str(_get_setting(name, default)).strip().lower()
     return raw_value not in {"0", "false", "no", "off", ""}
+
+
+def _parse_csv_setting(name: str, default: str = "") -> tuple[str, ...]:
+    raw_value = str(_get_setting(name, default) or "")
+    items = [item.strip().strip("'").strip('"') for item in raw_value.split(",")]
+    return tuple(item for item in items if item)
 
 
 def _normalize_phase_power_source(value: str) -> str:
@@ -94,6 +102,12 @@ MOSQUITTO_IP = _get_setting("MOSQUITTO_IP", "mosquitto.hs.mfis.net")
 MOSQUITTO_PORT = int(_get_setting("MOSQUITTO_PORT", "1883"))
 CERBO_AC_OUT_TOPIC = _get_setting("CERBO_AC_OUT_TOPIC", "N/48e7da878d35/vebus/276/Ac/Out")
 CERBO_AC_ACTIVEIN_TOPIC = _get_setting("CERBO_AC_ACTIVEIN_TOPIC", "N/48e7da878d35/vebus/276/Ac/ActiveIn")
+CERBO_PV_TOPICS = _parse_csv_setting(
+    "CERBO_PV_TOPICS",
+    "N/48e7da878d35/solarcharger/283/Pv/0/P,N/48e7da878d35/solarcharger/282/Pv/0/P,N/48e7da878d35/solarcharger/282/Pv/1/P",
+)
+CERBO_ENABLE_PV_SLAVE = _parse_bool_setting("CERBO_ENABLE_PV_SLAVE", "1")
+CERBO_PV_TARGET_SLAVE = max(int(_get_setting("CERBO_PV_TARGET_SLAVE", "1")), 1)
 CERBO_PHASE_POWER_SOURCE = _normalize_phase_power_source(_get_setting("CERBO_PHASE_POWER_SOURCE", "activein"))
 CERBO_FORCE_NONNEGATIVE_PHASE_POWER = _parse_bool_setting("CERBO_FORCE_NONNEGATIVE_PHASE_POWER", "0")
 CERBO_COHERENT_PHASE_FRAMES = _parse_bool_setting("CERBO_COHERENT_PHASE_FRAMES", "1")
@@ -194,6 +208,7 @@ def _log_source_effective_config() -> None:
     logger.info(
         (
             "Cerbo MQTT source: host=%s(%s) port=%s(%s) ac_out_topic=%s(%s) ac_activein_topic=%s(%s) "
+            "pv_topics=%s(%s) pv_slave_enabled=%s(%s) pv_target_slave=%s(%s) "
             "phase_power_source=%s(%s) clamp_negative_phase_power=%s(%s) "
             "coherent_phase_frames=%s(%s) coherent_phase_frame_max_skew_seconds=%.2f(%s) "
             "protocol_debug=%s(%s) snapshot_debug_interval_seconds=%.2f(%s)"
@@ -206,6 +221,12 @@ def _log_source_effective_config() -> None:
         _get_setting_source("CERBO_AC_OUT_TOPIC"),
         CERBO_AC_ACTIVEIN_TOPIC,
         _get_setting_source("CERBO_AC_ACTIVEIN_TOPIC"),
+        ",".join(CERBO_PV_TOPICS) if CERBO_PV_TOPICS else "(none)",
+        _get_setting_source("CERBO_PV_TOPICS"),
+        int(CERBO_ENABLE_PV_SLAVE),
+        _get_setting_source("CERBO_ENABLE_PV_SLAVE"),
+        CERBO_PV_TARGET_SLAVE,
+        _get_setting_source("CERBO_PV_TARGET_SLAVE"),
         CERBO_PHASE_POWER_SOURCE,
         _get_setting_source("CERBO_PHASE_POWER_SOURCE"),
         int(CERBO_FORCE_NONNEGATIVE_PHASE_POWER),
@@ -229,6 +250,12 @@ def _log_source_effective_config() -> None:
             "Unsupported CERBO_PHASE_POWER_SOURCE=%r; using 'activein'. "
             "Supported values: activein, acout, abb.",
             _get_setting("CERBO_PHASE_POWER_SOURCE", "activein"),
+        )
+    if CERBO_ENABLE_PV_SLAVE and CERBO_PV_TARGET_SLAVE in {2, 100}:
+        logger.warning(
+            "CERBO_PV_TARGET_SLAVE=%s collides with existing virtual meters (2,100); "
+            "PV slave emulation will be disabled at runtime.",
+            CERBO_PV_TARGET_SLAVE,
         )
 
 
@@ -286,6 +313,49 @@ def _build_preview_snapshot_for_logging(
     )
 
 
+def _snapshot_pv_total_watts(usage_snapshot) -> float | None:
+    if usage_snapshot is None:
+        return None
+    pv_total_watts = getattr(usage_snapshot, "pv_total_watts", None)
+    if pv_total_watts is None:
+        return None
+    return max(float(pv_total_watts), 0.0)
+
+
+def _pv_preview_signature(
+    capture: RegisterCapture,
+    *,
+    pv_total_watts: float | None,
+) -> tuple[object, ...]:
+    return (
+        capture.target_slave,
+        capture.source_slave,
+        capture.register_name,
+        capture.address,
+        capture.address_length,
+        capture.source_values,
+        pv_total_watts,
+    )
+
+
+def _format_pv_preview_lines(
+    *,
+    pv_target_slave: int,
+    pv_total_watts: float | None,
+) -> list[str]:
+    if pv_total_watts is None:
+        return [f"Cerbo PV to Maxem (slave {pv_target_slave:03d}): awaiting baseline"]
+
+    phase_watts = split_total_watts_evenly(pv_total_watts)
+    return [
+        f"Cerbo PV to Maxem (slave {pv_target_slave:03d}): {pv_total_watts:,.2f} W",
+        (
+            f"Cerbo PV Phase Watts to Maxem (slave {pv_target_slave:03d}): "
+            f"L1={phase_watts[0]:,.2f} W, L2={phase_watts[1]:,.2f} W, L3={phase_watts[2]:,.2f} W"
+        ),
+    ]
+
+
 def main():
     args = _parse_args()
     dry_run_maxem_home = args.dry_run_maxem_home
@@ -294,12 +364,14 @@ def main():
     rtu_slave_server = None
     maxem_100 = None
     maxem_2 = None
+    maxem_pv = None
     victron_100 = None
     victron_2 = None
     rewrite_cache = None
     rewrite_poller = None
     tcp_master = None
     status_ticker = _LoopStatusTicker(STATUS_LOG_INTERVAL_SECONDS)
+    pv_slave_enabled_runtime = CERBO_ENABLE_PV_SLAVE and CERBO_PV_TARGET_SLAVE not in {2, 100}
 
     try:
         tcp_slave_server = modbus_tcp.TcpServer(port=502)
@@ -325,6 +397,7 @@ def main():
             broker_port=MOSQUITTO_PORT,
             ac_out_topic_base=CERBO_AC_OUT_TOPIC,
             ac_active_in_topic_base=CERBO_AC_ACTIVEIN_TOPIC,
+            pv_power_topics=CERBO_PV_TOPICS,
             cache=rewrite_cache,
             protocol_debug=CERBO_MQTT_PROTOCOL_DEBUG,
             snapshot_debug_interval_seconds=CERBO_MQTT_SNAPSHOT_DEBUG_INTERVAL_SECONDS,
@@ -333,6 +406,11 @@ def main():
             logger=logger,
         )
         rewrite_poller.start()
+        if CERBO_ENABLE_PV_SLAVE and not pv_slave_enabled_runtime:
+            logger.warning(
+                "PV virtual meter disabled because CERBO_PV_TARGET_SLAVE=%s collides with existing slave addresses.",
+                CERBO_PV_TARGET_SLAVE,
+            )
 
         if dry_run_maxem_home:
             logger.info(
@@ -353,6 +431,8 @@ def main():
             )
             maxem_100 = rtu_slave_server.add_slave(100)
             maxem_2 = rtu_slave_server.add_slave(2)
+            if pv_slave_enabled_runtime:
+                maxem_pv = rtu_slave_server.add_slave(CERBO_PV_TARGET_SLAVE)
 
             # Maxem Home compatible memory blocks
             for register_name in MAXEM_HOLDING_REGISTERS:
@@ -360,6 +440,8 @@ def main():
                 addr_len = MAXEM_HOLDING_REGISTERS[register_name][1]
                 maxem_100.add_block(register_name, cst.HOLDING_REGISTERS, addr, addr_len)
                 maxem_2.add_block(register_name, cst.HOLDING_REGISTERS, addr, addr_len)
+                if maxem_pv is not None:
+                    maxem_pv.add_block(register_name, cst.HOLDING_REGISTERS, addr, addr_len)
 
             rtu_slave_server.start()
             logger.info(f"Modbus RTU slave server started...")
@@ -432,7 +514,8 @@ def main():
                                 capture,
                                 snapshot=preview_display_snapshot,
                             )
-                            if preview_signature_value != last_preview_signatures.get((capture.target_slave, capture.source_slave, capture.register_name)):
+                            preview_signature_key = (capture.target_slave, capture.source_slave, capture.register_name)
+                            if preview_signature_value != last_preview_signatures.get(preview_signature_key):
                                 for preview_line in format_instantaneous_preview_lines(
                                     capture,
                                     snapshot=preview_display_snapshot,
@@ -441,9 +524,44 @@ def main():
                                 if trace_instantaneous_payload:
                                     for trace_line in format_instantaneous_diff_lines(capture.source_values, rewritten_values):
                                         logger.info(f"trace {trace_line}")
-                                last_preview_signatures[
-                                    (capture.target_slave, capture.source_slave, capture.register_name)
-                                ] = preview_signature_value
+                                last_preview_signatures[preview_signature_key] = preview_signature_value
+
+                            if pv_slave_enabled_runtime:
+                                pv_total_watts = _snapshot_pv_total_watts(preview_snapshot)
+                                pv_capture = RegisterCapture(
+                                    target_slave=CERBO_PV_TARGET_SLAVE,
+                                    source_slave=100,
+                                    register_name=register_name,
+                                    address=addr,
+                                    address_length=addr_len,
+                                    source_values=tuple(int(value) for value in acload_values),
+                                )
+                                pv_rewritten_values = rewrite_pv_instantaneous_values(
+                                    acload_values,
+                                    pv_total_watts=pv_total_watts,
+                                )
+                                pv_preview_signature_value = _pv_preview_signature(
+                                    pv_capture,
+                                    pv_total_watts=pv_total_watts,
+                                )
+                                pv_preview_signature_key = (
+                                    pv_capture.target_slave,
+                                    pv_capture.source_slave,
+                                    pv_capture.register_name,
+                                )
+                                if pv_preview_signature_value != last_preview_signatures.get(pv_preview_signature_key):
+                                    for preview_line in _format_pv_preview_lines(
+                                        pv_target_slave=CERBO_PV_TARGET_SLAVE,
+                                        pv_total_watts=pv_total_watts,
+                                    ):
+                                        logger.debug(preview_line)
+                                    if trace_instantaneous_payload:
+                                        for trace_line in format_instantaneous_diff_lines(
+                                            pv_capture.source_values,
+                                            pv_rewritten_values,
+                                        ):
+                                            logger.info(f"trace pv {trace_line}")
+                                    last_preview_signatures[pv_preview_signature_key] = pv_preview_signature_value
                         elif rtu_slave_server and maxem_100:
                             # Rewrite only the selected instantaneous current/power words from Cerbo MQTT;
                             # mirror every other Maxem register block verbatim from ABB.
@@ -483,7 +601,8 @@ def main():
                                     capture,
                                     snapshot=live_preview_snapshot,
                                 )
-                                if live_preview_signature != last_preview_signatures.get((capture.target_slave, capture.source_slave, capture.register_name)):
+                                live_preview_signature_key = (capture.target_slave, capture.source_slave, capture.register_name)
+                                if live_preview_signature != last_preview_signatures.get(live_preview_signature_key):
                                     for preview_line in format_instantaneous_preview_lines(
                                         capture,
                                         snapshot=live_preview_snapshot,
@@ -492,12 +611,50 @@ def main():
                                     if trace_instantaneous_payload:
                                         for trace_line in format_instantaneous_diff_lines(capture.source_values, rewritten_values):
                                             logger.info(f"trace {trace_line}")
-                                    last_preview_signatures[
-                                        (capture.target_slave, capture.source_slave, capture.register_name)
-                                    ] = live_preview_signature
+                                    last_preview_signatures[live_preview_signature_key] = live_preview_signature
                                 maxem_100.set_values(register_name, addr, rewritten_values)
+
+                                if maxem_pv is not None:
+                                    pv_total_watts = _snapshot_pv_total_watts(usage_snapshot)
+                                    pv_capture = RegisterCapture(
+                                        target_slave=CERBO_PV_TARGET_SLAVE,
+                                        source_slave=100,
+                                        register_name=register_name,
+                                        address=addr,
+                                        address_length=addr_len,
+                                        source_values=tuple(int(value) for value in acload_values),
+                                    )
+                                    pv_rewritten_values = rewrite_pv_instantaneous_values(
+                                        acload_values,
+                                        pv_total_watts=pv_total_watts,
+                                    )
+                                    pv_preview_signature_value = _pv_preview_signature(
+                                        pv_capture,
+                                        pv_total_watts=pv_total_watts,
+                                    )
+                                    pv_preview_signature_key = (
+                                        pv_capture.target_slave,
+                                        pv_capture.source_slave,
+                                        pv_capture.register_name,
+                                    )
+                                    if pv_preview_signature_value != last_preview_signatures.get(pv_preview_signature_key):
+                                        for preview_line in _format_pv_preview_lines(
+                                            pv_target_slave=CERBO_PV_TARGET_SLAVE,
+                                            pv_total_watts=pv_total_watts,
+                                        ):
+                                            logger.debug(preview_line)
+                                        if trace_instantaneous_payload:
+                                            for trace_line in format_instantaneous_diff_lines(
+                                                pv_capture.source_values,
+                                                pv_rewritten_values,
+                                            ):
+                                                logger.info(f"trace pv {trace_line}")
+                                        last_preview_signatures[pv_preview_signature_key] = pv_preview_signature_value
+                                    maxem_pv.set_values(register_name, addr, pv_rewritten_values)
                             else:
                                 maxem_100.set_values(register_name, addr, acload_values)
+                                if maxem_pv is not None:
+                                    maxem_pv.set_values(register_name, addr, acload_values)
                     if dry_run_maxem_home:
                         continue
 
