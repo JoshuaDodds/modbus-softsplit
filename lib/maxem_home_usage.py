@@ -287,6 +287,7 @@ class CerboMqttSnapshot:
     ac_in_total_watts: float | None = None
     ac_out_phase_currents: tuple[float, float, float] | None = None
     ac_out_current_n: float | None = None
+    pv_total_watts: float | None = None
     source_label: str = "Cerbo"
 
     @property
@@ -314,6 +315,7 @@ class CerboMqttCache:
         self._ac_in_total_watts: float | None = None
         self._ac_out_phase_currents: tuple[float, float, float] | None = None
         self._ac_out_current_n: float | None = None
+        self._pv_total_watts: float | None = None
 
     def update(
         self,
@@ -321,6 +323,7 @@ class CerboMqttCache:
         ac_in_phase_watts: tuple[float, float, float],
         ac_out_phase_currents: tuple[float, float, float],
         ac_out_current_n: float | None,
+        pv_total_watts: float | None = None,
     ) -> CerboMqttSnapshot:
         with self._lock:
             self._sequence += 1
@@ -328,12 +331,14 @@ class CerboMqttCache:
             self._ac_in_total_watts = float(sum(self._ac_in_phase_watts))
             self._ac_out_phase_currents = tuple(max(float(value), 0.0) for value in ac_out_phase_currents)
             self._ac_out_current_n = None if ac_out_current_n is None else max(float(ac_out_current_n), 0.0)
+            self._pv_total_watts = None if pv_total_watts is None else max(float(pv_total_watts), 0.0)
             return CerboMqttSnapshot(
                 sequence=self._sequence,
                 ac_in_phase_watts=self._ac_in_phase_watts,
                 ac_in_total_watts=self._ac_in_total_watts,
                 ac_out_phase_currents=self._ac_out_phase_currents,
                 ac_out_current_n=self._ac_out_current_n,
+                pv_total_watts=self._pv_total_watts,
             )
 
     def snapshot(self) -> CerboMqttSnapshot:
@@ -344,6 +349,7 @@ class CerboMqttCache:
                 ac_in_total_watts=self._ac_in_total_watts,
                 ac_out_phase_currents=self._ac_out_phase_currents,
                 ac_out_current_n=self._ac_out_current_n,
+                pv_total_watts=self._pv_total_watts,
             )
 
 
@@ -355,6 +361,7 @@ class CerboMqttPoller(threading.Thread):
         broker_port: int,
         ac_out_topic_base: str,
         ac_active_in_topic_base: str,
+        pv_power_topics: Sequence[str] | None,
         cache: CerboMqttCache,
         protocol_debug: bool = False,
         snapshot_debug_interval_seconds: float = 0.0,
@@ -382,12 +389,29 @@ class CerboMqttPoller(threading.Thread):
         self._phase_in_updated_mask = 0
         self._phase_out_updated_mask = 0
         self._current_n: float | None = None
+        self._pv_power_topics = self._normalize_pv_topics(pv_power_topics)
+        self._pv_topic_values: dict[str, float | None] = {topic: None for topic in self._pv_power_topics}
         self._client = mqtt.Client(client_id=f"modbus-softsplit-{int(time.time())}", protocol=mqtt.MQTTv311)
         if self._protocol_debug:
             self._client.enable_logger(self._logger)
         self._client.on_connect = self._on_connect
         self._client.on_message = self._on_message
         self._client.on_disconnect = self._on_disconnect
+
+    @staticmethod
+    def _normalize_pv_topics(topics: Sequence[str] | None) -> tuple[str, ...]:
+        if not topics:
+            return ()
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for topic in topics:
+            cleaned = str(topic or "").strip().rstrip("/")
+            if not cleaned or cleaned in seen:
+                continue
+            normalized.append(cleaned)
+            seen.add(cleaned)
+        return tuple(normalized)
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -410,13 +434,23 @@ class CerboMqttPoller(threading.Thread):
             (f"{self._ac_out_topic_base}/L3/I", 0),
             (f"{self._ac_out_topic_base}/N/I", 0),
         ]
+        for pv_topic in self._pv_power_topics:
+            subscriptions.append((pv_topic, 0))
         for topic, qos in subscriptions:
             client.subscribe(topic, qos=qos)
-        self._logger.info(
-            "Cerbo MQTT connected to %s:%s; subscribed read-only to Ac/ActiveIn and Ac/Out topics.",
-            self._broker_host,
-            self._broker_port,
-        )
+        if self._pv_power_topics:
+            self._logger.info(
+                "Cerbo MQTT connected to %s:%s; subscribed read-only to Ac/ActiveIn, Ac/Out, and %d PV topic(s).",
+                self._broker_host,
+                self._broker_port,
+                len(self._pv_power_topics),
+            )
+        else:
+            self._logger.info(
+                "Cerbo MQTT connected to %s:%s; subscribed read-only to Ac/ActiveIn and Ac/Out topics.",
+                self._broker_host,
+                self._broker_port,
+            )
 
     def _on_disconnect(self, client, userdata, rc):
         if self._stop_event.is_set():
@@ -432,6 +466,10 @@ class CerboMqttPoller(threading.Thread):
         return float(parsed["value"])
 
     def _update_phase_slot(self, topic: str, value: float) -> bool:
+        if topic in self._pv_topic_values:
+            self._pv_topic_values[topic] = max(float(value), 0.0)
+            return True
+
         now = time.monotonic()
         for phase_index, phase_name in enumerate(("L1", "L2", "L3")):
             if topic.endswith(f"/{phase_name}/P"):
@@ -448,6 +486,14 @@ class CerboMqttPoller(threading.Thread):
             self._current_n = max(float(value), 0.0)
             return True
         return False
+
+    def _current_pv_total_watts(self) -> float | None:
+        if not self._pv_topic_values:
+            return None
+        values = list(self._pv_topic_values.values())
+        if any(value is None for value in values):
+            return None
+        return float(sum(float(value) for value in values))
 
     def _has_baseline_values(self) -> bool:
         return not any(v is None for v in self._phase_in_watts) and not any(v is None for v in self._phase_out_currents)
@@ -503,6 +549,7 @@ class CerboMqttPoller(threading.Thread):
                 float(self._phase_out_currents[2]),
             ),
             ac_out_current_n=self._current_n,
+            pv_total_watts=self._current_pv_total_watts(),
         )
         if self._coherent_phase_frames:
             self._phase_in_updated_mask = 0
@@ -520,7 +567,7 @@ class CerboMqttPoller(threading.Thread):
         self._logger.debug(
             (
                 "Cerbo MQTT snapshot updated: sequence=%s ac_in_total_watts=%.2f ac_in_phase_watts=(%.2f, %.2f, %.2f) "
-                "ac_out_phase_currents=(%.2f, %.2f, %.2f) ac_out_current_n=%s"
+                "ac_out_phase_currents=(%.2f, %.2f, %.2f) ac_out_current_n=%s pv_total_watts=%s"
             ),
             snapshot.sequence,
             snapshot.rewrite_usage_watts or 0.0,
@@ -531,6 +578,7 @@ class CerboMqttPoller(threading.Thread):
             snapshot.phase_current_amps[1] if snapshot.phase_current_amps else 0.0,
             snapshot.phase_current_amps[2] if snapshot.phase_current_amps else 0.0,
             current_n_text,
+            "n/a" if snapshot.pv_total_watts is None else f"{snapshot.pv_total_watts:.2f}",
         )
 
     def run(self) -> None:
@@ -684,6 +732,48 @@ def net_signed_phase_watts_to_nonnegative_import(
     )
 
 
+def split_total_watts_evenly(total_watts: float | None) -> tuple[float, float, float] | None:
+    if total_watts is None:
+        return None
+
+    clamped_total_watts = max(float(total_watts), 0.0)
+    per_phase = clamped_total_watts / 3.0
+    return (
+        per_phase,
+        per_phase,
+        clamped_total_watts - (2.0 * per_phase),
+    )
+
+
+def derive_phase_currents_from_watts(
+    source_values: Sequence[int],
+    phase_watts: tuple[float, float, float] | None,
+    *,
+    fallback_phase_voltage_volts: float = 230.0,
+) -> tuple[float, float, float] | None:
+    if phase_watts is None:
+        return None
+
+    derived_currents: list[float] = []
+    for phase_index, phase_offset in enumerate(INSTANTANEOUS_VOLTAGE_PHASE_OFFSETS):
+        voltage = _decode_scaled_value(
+            source_values,
+            offset=phase_offset,
+            scale=INSTANTANEOUS_VOLTAGE_PHASE_SCALE,
+            signed=False,
+            register_length=INSTANTANEOUS_VOLTAGE_PHASE_LENGTH,
+        )
+        if voltage is None or voltage <= 0.0:
+            voltage = float(fallback_phase_voltage_volts)
+        watts = max(float(phase_watts[phase_index]), 0.0)
+        derived_currents.append(watts / float(voltage))
+    return (
+        derived_currents[0],
+        derived_currents[1],
+        derived_currents[2],
+    )
+
+
 def encode_signed_scaled_watts(
     value_watts: float,
     *,
@@ -756,6 +846,25 @@ def rewrite_instantaneous_values(
         values[INSTANTANEOUS_CURRENT_N_OFFSET + 1] = n_low_word
 
     return tuple(values)
+
+
+def rewrite_pv_instantaneous_values(
+    source_values: Sequence[int],
+    *,
+    pv_total_watts: float | None,
+) -> tuple[int, ...]:
+    phase_watts = split_total_watts_evenly(pv_total_watts)
+    phase_currents = derive_phase_currents_from_watts(source_values, phase_watts)
+    total_watts = 0.0 if pv_total_watts is None else max(float(pv_total_watts), 0.0)
+    return rewrite_instantaneous_values(
+        source_values,
+        usage_watts=total_watts,
+        phase_usage_watts=phase_watts,
+        phase_current_amps=phase_currents,
+        current_n_amps=0.0,
+        allow_negative=False,
+        allow_negative_phase=False,
+    )
 
 
 def _snapshot_rewrite_usage_watts(snapshot: Any | None) -> float | None:

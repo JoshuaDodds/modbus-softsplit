@@ -21,12 +21,15 @@ from lib.maxem_home_usage import (
     decode_instantaneous_fields,
     decode_signed_scaled_watts,
     describe_instantaneous_preview_basis,
+    derive_phase_currents_from_watts,
     derive_phase_watts_from_currents,
     encode_signed_scaled_watts,
     format_instantaneous_diff_lines,
     format_instantaneous_preview_lines,
     net_signed_phase_watts_to_nonnegative_import,
+    rewrite_pv_instantaneous_values,
     rewrite_instantaneous_values,
+    split_total_watts_evenly,
 )
 from lib.synthetic_home import DomoticzClient, DomoticzReading, RegisterCapture
 
@@ -230,6 +233,67 @@ class MaxemHomeUsageTests(unittest.TestCase):
         self.assertAlmostEqual(derived[0], 230.0, places=2)
         self.assertAlmostEqual(derived[1], 460.0, places=2)
         self.assertAlmostEqual(derived[2], 690.0, places=2)
+
+    def test_split_total_watts_evenly_distributes_sum_without_loss(self) -> None:
+        phase_watts = split_total_watts_evenly(1000.0)
+
+        self.assertIsNotNone(phase_watts)
+        self.assertAlmostEqual(sum(phase_watts), 1000.0, places=6)
+        self.assertAlmostEqual(phase_watts[0], phase_watts[1], places=6)
+        self.assertGreaterEqual(phase_watts[2], 0.0)
+
+    def test_derive_phase_currents_from_watts_uses_source_phase_voltages(self) -> None:
+        source_values = [0] * INSTANTANEOUS_VALUES_REGISTER_LENGTH
+
+        def set_voltage(address: int, value_volts: float) -> None:
+            offset = address - INSTANTANEOUS_VALUES_REGISTER_ADDRESS
+            raw = int(round(value_volts / 0.1))
+            payload = raw.to_bytes(4, byteorder="big", signed=False)
+            source_values[offset] = int.from_bytes(payload[:2], byteorder="big")
+            source_values[offset + 1] = int.from_bytes(payload[2:], byteorder="big")
+
+        set_voltage(0x5B00, 230.0)
+        set_voltage(0x5B02, 231.0)
+        set_voltage(0x5B04, 232.0)
+
+        currents = derive_phase_currents_from_watts(
+            tuple(source_values),
+            (230.0, 462.0, 116.0),
+        )
+
+        self.assertIsNotNone(currents)
+        self.assertAlmostEqual(currents[0], 1.0, places=4)
+        self.assertAlmostEqual(currents[1], 2.0, places=4)
+        self.assertAlmostEqual(currents[2], 0.5, places=4)
+
+    def test_rewrite_pv_instantaneous_values_sets_total_phase_power_and_currents(self) -> None:
+        source_values = [0] * INSTANTANEOUS_VALUES_REGISTER_LENGTH
+
+        def set_voltage(address: int, value_volts: float) -> None:
+            offset = address - INSTANTANEOUS_VALUES_REGISTER_ADDRESS
+            raw = int(round(value_volts / 0.1))
+            payload = raw.to_bytes(4, byteorder="big", signed=False)
+            source_values[offset] = int.from_bytes(payload[:2], byteorder="big")
+            source_values[offset + 1] = int.from_bytes(payload[2:], byteorder="big")
+
+        set_voltage(0x5B00, 230.0)
+        set_voltage(0x5B02, 230.0)
+        set_voltage(0x5B04, 230.0)
+
+        rewritten = rewrite_pv_instantaneous_values(
+            tuple(source_values),
+            pv_total_watts=900.0,
+        )
+        decoded = decode_instantaneous_fields(rewritten)
+
+        self.assertAlmostEqual(decoded["active_power_total"] or 0.0, 900.0, places=2)
+        self.assertAlmostEqual(decoded["active_power_l1"] or 0.0, 300.0, places=2)
+        self.assertAlmostEqual(decoded["active_power_l2"] or 0.0, 300.0, places=2)
+        self.assertAlmostEqual(decoded["active_power_l3"] or 0.0, 300.0, places=2)
+        self.assertAlmostEqual(decoded["current_l1"] or 0.0, 1.30, places=2)
+        self.assertAlmostEqual(decoded["current_l2"] or 0.0, 1.30, places=2)
+        self.assertAlmostEqual(decoded["current_l3"] or 0.0, 1.30, places=2)
+        self.assertAlmostEqual(decoded["current_n"] or 0.0, 0.0, places=2)
 
     def test_net_signed_phase_watts_to_nonnegative_import_offsets_exports(self) -> None:
         netted = net_signed_phase_watts_to_nonnegative_import((-350.0, 350.0, 0.0))

@@ -6,6 +6,7 @@ Validate that Maxem sees:
 
 - Home/grid power driven by Cerbo `Ac/ActiveIn` rewrite values.
 - Phase current safety behavior driven by Cerbo `Ac/Out` current signals.
+- (Optional) Solar meter slave `001` powered by summed Cerbo `solarcharger/.../Pv/.../P` topics.
 
 ## Preconditions
 
@@ -18,6 +19,10 @@ Validate that Maxem sees:
   - `CERBO_FORCE_NONNEGATIVE_PHASE_POWER`
   - `CERBO_COHERENT_PHASE_FRAMES`
   - `CERBO_COHERENT_PHASE_FRAME_MAX_SKEW_SECONDS`
+- If PV virtual meter is enabled, explicitly record:
+  - `CERBO_ENABLE_PV_SLAVE`
+  - `CERBO_PV_TARGET_SLAVE`
+  - `CERBO_PV_TOPICS`
 
 ## Step 1: Offline Sanity Capture
 
@@ -72,6 +77,12 @@ In Maxem UI/app, compare:
 - Charger power.
 
 During known scenarios (for example: charging from battery/solar with low net grid import), verify Home and Grid values align with desired interpretation.
+
+When PV virtual meter is enabled:
+
+- Confirm Maxem autoconfig finds kWh meter address `001`.
+- Confirm logs show `Cerbo PV to Maxem (slave 001): ...`.
+- Confirm only slave `001` instantaneous words are rewritten for PV semantics; other blocks remain mirrored.
 
 ## Step 4: Long-Run Observation
 
