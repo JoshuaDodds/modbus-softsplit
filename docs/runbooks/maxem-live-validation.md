@@ -47,7 +47,7 @@ Expected:
   - `0x5B14, 0x5B15` (total power)
   - `0x5B16..0x5B1B` (phase L1/L2/L3 power)
 - Voltage fields remain unchanged unless source changed.
-- Power rewrite values can be positive or negative (Cerbo `Ac/ActiveIn`).
+- On slave `100`, power rewrite writes are unsigned-clamped (`<0` -> `0`).
 - Current rewrite values are clamped to non-negative (Cerbo `Ac/Out`).
 
 ## Step 2: Live Runtime with Trace
@@ -84,6 +84,10 @@ When PV virtual meter is enabled:
 
 - Confirm Maxem autoconfig finds kWh meter address `001`.
 - Confirm logs show `Cerbo PV to Maxem (slave 001): ...`.
+- Confirm slave `001` PV semantics:
+  - `active_power_total` is signed-negative PV power.
+  - `active_power_l1` mirrors that signed-negative value.
+  - `active_power_l2/l3` are `0`.
 - Confirm only slave `001` instantaneous words are rewritten for PV semantics; non-instantaneous blocks are not mirrored from slave `100`.
 
 ## Step 4: Long-Run Observation

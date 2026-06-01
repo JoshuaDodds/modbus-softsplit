@@ -16,7 +16,7 @@ operator-facing assumptions for `modbus-softsplit`.
     - `N/48e7da878d35/system/0/Dc/Pv/Power`
 - Power rewrite source:
   - `Ac/ActiveIn/L1|L2|L3/P` -> active power total + per phase words.
-  - Values may be positive or negative.
+  - Source values may be positive or negative, but slave `100` writes are unsigned-clamped.
 - `CERBO_PHASE_POWER_SOURCE` controls phase-power words (`0x5B16..0x5B1B`):
   - `activein` -> phase power from Cerbo `Ac/ActiveIn` (signed).
   - `acout` -> phase power derived from ABB phase voltages and Cerbo `Ac/Out` currents.
@@ -39,20 +39,25 @@ operator-facing assumptions for `modbus-softsplit`.
   - `0x5B14/0x5B15` active power total from Cerbo `Ac/ActiveIn`.
   - `0x5B16/0x5B17`, `0x5B18/0x5B19`, `0x5B1A/0x5B1B`
     active power per-phase from `CERBO_PHASE_POWER_SOURCE`.
+- On slave `100`, all rewritten current/power fields are written as unsigned values:
+  - total power negative values are clamped to `0`.
+  - phase power negative values are clamped to `0`.
+  - currents are clamped to `>=0`.
 - All other words in `instantaneous_values` and all other Maxem register blocks
   are mirrored unchanged from the ABB source.
 - Optional PV meter emulation (`CERBO_ENABLE_PV_SLAVE=1`) publishes a virtual
   Maxem-compatible slave (default address `001` via `CERBO_PV_TARGET_SLAVE`):
   - non-instantaneous blocks are not mirrored from slave `100` (kept independent/zeroed unless explicitly synthesized).
   - in `instantaneous_values`, slave `001` rewrites:
-    - `0x5B14/0x5B15` to summed PV watts from `CERBO_PV_TOPICS`.
-    - `0x5B16..0x5B1B` to an equal 3-phase split of that total.
-    - `0x5B0C..0x5B13` to derived non-negative phase currents from
-      rewritten phase watts and ABB phase voltages; neutral current is `0`.
+    - `0x5B14/0x5B15` to `-abs(PV_total_watts)` from `CERBO_PV_TOPICS` (signed).
+    - `0x5B16/0x5B17` to the same signed-negative value (single-phase L1 mirror).
+    - `0x5B18..0x5B1B` to `0` (L2/L3 power words).
+    - current words are not rewritten by the PV helper in this model.
 - Optional home offset mode (`CERBO_SUBTRACT_PV_FROM_HOME_USAGE=1`) rewrites
   slave `100` home/grid instantaneous active power as:
-  - `home_usage_watts - pv_total_watts` (signed) in `active_power_total`.
-  - `active_power_l1/l2/l3` are written as non-negative values in this mode.
+  - `home_usage_watts - pv_total_watts` before unsigned encoding.
+  - write result to `active_power_total` with floor at `0`.
+  - write phase powers with per-phase floor at `0`.
 - Preview logs should stay short and verifiable:
   - `ABB source: X W`
   - `Cerbo Usage to Maxem: Y W`

@@ -268,7 +268,7 @@ class MaxemHomeUsageTests(unittest.TestCase):
         self.assertAlmostEqual(currents[1], 2.0, places=4)
         self.assertAlmostEqual(currents[2], 0.5, places=4)
 
-    def test_rewrite_pv_instantaneous_values_sets_total_phase_power_and_currents(self) -> None:
+    def test_rewrite_pv_instantaneous_values_sets_signed_single_phase_power(self) -> None:
         source_values = [0] * INSTANTANEOUS_VALUES_REGISTER_LENGTH
 
         def set_voltage(address: int, value_volts: float) -> None:
@@ -288,13 +288,13 @@ class MaxemHomeUsageTests(unittest.TestCase):
         )
         decoded = decode_instantaneous_fields(rewritten)
 
-        self.assertAlmostEqual(decoded["active_power_total"] or 0.0, 900.0, places=2)
-        self.assertAlmostEqual(decoded["active_power_l1"] or 0.0, 300.0, places=2)
-        self.assertAlmostEqual(decoded["active_power_l2"] or 0.0, 300.0, places=2)
-        self.assertAlmostEqual(decoded["active_power_l3"] or 0.0, 300.0, places=2)
-        self.assertAlmostEqual(decoded["current_l1"] or 0.0, 1.30, places=2)
-        self.assertAlmostEqual(decoded["current_l2"] or 0.0, 1.30, places=2)
-        self.assertAlmostEqual(decoded["current_l3"] or 0.0, 1.30, places=2)
+        self.assertAlmostEqual(decoded["active_power_total"] or 0.0, -900.0, places=2)
+        self.assertAlmostEqual(decoded["active_power_l1"] or 0.0, -900.0, places=2)
+        self.assertAlmostEqual(decoded["active_power_l2"] or 0.0, 0.0, places=2)
+        self.assertAlmostEqual(decoded["active_power_l3"] or 0.0, 0.0, places=2)
+        self.assertAlmostEqual(decoded["current_l1"] or 0.0, 0.0, places=2)
+        self.assertAlmostEqual(decoded["current_l2"] or 0.0, 0.0, places=2)
+        self.assertAlmostEqual(decoded["current_l3"] or 0.0, 0.0, places=2)
         self.assertAlmostEqual(decoded["current_n"] or 0.0, 0.0, places=2)
 
     def test_net_signed_phase_watts_to_nonnegative_import_offsets_exports(self) -> None:

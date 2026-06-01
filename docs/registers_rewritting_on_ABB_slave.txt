@@ -1,20 +1,42 @@
-Rewritten words (all from maxem_home_usage.py (line 28) and rewrite logic (line 805)):
-0x5B14/0x5B15 (active_power_total, signed, 0.01 W)  
+Current rewrite model
 
-Value = home_usage_watts - pv_total_watts when PV offset is enabled in main.py (line 346).  
-Can be negative.
-0x5B16/0x5B17 (active_power_l1, signed, 0.01 W)  
-0x5B18/0x5B19 (active_power_l2, signed, 0.01 W)  
-0x5B1A/0x5B1B (active_power_l3, signed, 0.01 W)  
+Slave 100 (ABB/Home meter path)
 
-In current mode, these are the signed total spread across 3 phases in main.py (line 336).  
+Rewritten words in `instantaneous_values`:
 
-If PV offset is off or no PV value is available, phase source falls back to CERBO_PHASE_POWER_SOURCE behavior in main.py (line 266).
-0x5B0C/0x5B0D (current_l1, unsigned, 0.01 A)  
-0x5B0E/0x5B0F (current_l2, unsigned, 0.01 A)  
-0x5B10/0x5B11 (current_l3, unsigned, 0.01 A)  
+- `0x5B14/0x5B15` (`active_power_total`, 0.01 W):
+  - Source intent: Cerbo usage (with optional PV subtraction before encoding).
+  - Encoding mode: unsigned write (negative values are clamped to `0`).
 
-From Cerbo Ac/Out phase currents (non-negative) in main.py (line 643).
-0x5B12/0x5B13 (current_n, unsigned, 0.01 A)  
+- `0x5B16/0x5B17` (`active_power_l1`, 0.01 W)
+- `0x5B18/0x5B19` (`active_power_l2`, 0.01 W)
+- `0x5B1A/0x5B1B` (`active_power_l3`, 0.01 W)
+  - Source intent: phase usage from configured phase source.
+  - Encoding mode: unsigned write (each phase clamped to `>= 0`).
 
-From Cerbo neutral current if present; if missing, this pair is left as source value by the rewrite function in maxem_home_usage.py (line 843).
+- `0x5B0C/0x5B0D` (`current_l1`, unsigned, 0.01 A)
+- `0x5B0E/0x5B0F` (`current_l2`, unsigned, 0.01 A)
+- `0x5B10/0x5B11` (`current_l3`, unsigned, 0.01 A)
+- `0x5B12/0x5B13` (`current_n`, unsigned, 0.01 A)
+  - Source: Cerbo `Ac/Out` currents.
+  - Encoding mode: unsigned write (non-negative clamp).
+
+All other words for slave `100` are mirrored from upstream ABB.
+
+Slave 001 (PV virtual meter path)
+
+Rewritten words in `instantaneous_values`:
+
+- `0x5B14/0x5B15` (`active_power_total`, signed, 0.01 W):
+  - Value: `-abs(PV_total_watts)` from configured Cerbo PV topic(s).
+
+- `0x5B16/0x5B17` (`active_power_l1`, signed, 0.01 W):
+  - Value: same signed-negative value as `active_power_total` (single-phase mirror).
+
+- `0x5B18/0x5B19` (`active_power_l2`, signed, 0.01 W):
+  - Value: `0`.
+
+- `0x5B1A/0x5B1B` (`active_power_l3`, signed, 0.01 W):
+  - Value: `0`.
+
+Current words on slave `001` are not rewritten by the PV helper in this model.

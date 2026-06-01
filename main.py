@@ -19,7 +19,6 @@ from lib.maxem_home_usage import (
     CerboMqttPoller,
     INSTANTANEOUS_VALUES_REGISTER_NAME,
     describe_instantaneous_preview_basis,
-    split_total_watts_evenly,
     derive_phase_watts_from_currents,
     format_instantaneous_diff_lines,
     format_instantaneous_preview_lines,
@@ -365,6 +364,17 @@ def _apply_pv_offset_to_home_usage(
     return adjusted_usage_watts, adjusted_phase_usage_watts
 
 
+def _clamp_unsigned_usage_for_rewrite(
+    *,
+    usage_watts: float,
+    phase_usage_watts: tuple[float, float, float] | None,
+) -> tuple[float, tuple[float, float, float] | None]:
+    clamped_usage_watts = max(float(usage_watts), 0.0)
+    if phase_usage_watts is None:
+        return clamped_usage_watts, None
+    return clamped_usage_watts, tuple(max(float(value), 0.0) for value in phase_usage_watts)
+
+
 def _pv_preview_signature(
     capture: RegisterCapture,
     *,
@@ -389,12 +399,12 @@ def _format_pv_preview_lines(
     if pv_total_watts is None:
         return [f"Cerbo PV to Maxem (slave {pv_target_slave:03d}): awaiting baseline"]
 
-    phase_watts = split_total_watts_evenly(pv_total_watts)
+    pv_signed_total_watts = -max(float(pv_total_watts), 0.0)
     return [
-        f"Cerbo PV to Maxem (slave {pv_target_slave:03d}): {pv_total_watts:,.2f} W",
+        f"Cerbo PV to Maxem (slave {pv_target_slave:03d}): {pv_signed_total_watts:,.2f} W",
         (
             f"Cerbo PV Phase Watts to Maxem (slave {pv_target_slave:03d}): "
-            f"L1={phase_watts[0]:,.2f} W, L2={phase_watts[1]:,.2f} W, L3={phase_watts[2]:,.2f} W"
+            f"L1={pv_signed_total_watts:,.2f} W, L2=0.00 W, L3=0.00 W"
         ),
     ]
 
@@ -548,6 +558,10 @@ def main():
                                 phase_usage_watts=phase_usage_watts,
                                 usage_snapshot=preview_snapshot,
                             )
+                            usage_watts, phase_usage_watts = _clamp_unsigned_usage_for_rewrite(
+                                usage_watts=usage_watts,
+                                phase_usage_watts=phase_usage_watts,
+                            )
                             phase_current_amps = preview_snapshot.phase_current_amps if preview_snapshot else None
                             current_n_amps = preview_snapshot.current_n_amps if preview_snapshot else None
                             preview_display_snapshot = _build_preview_snapshot_for_logging(
@@ -561,8 +575,8 @@ def main():
                                 phase_usage_watts=phase_usage_watts,
                                 phase_current_amps=phase_current_amps,
                                 current_n_amps=current_n_amps,
-                                allow_negative=True,
-                                allow_negative_phase=_allow_negative_phase_power_for_rewrite(),
+                                allow_negative=False,
+                                allow_negative_phase=False,
                             )
                             preview_signature_value = preview_signature(
                                 capture,
@@ -641,6 +655,10 @@ def main():
                                     phase_usage_watts=phase_usage_watts,
                                     usage_snapshot=usage_snapshot,
                                 )
+                                usage_watts, phase_usage_watts = _clamp_unsigned_usage_for_rewrite(
+                                    usage_watts=usage_watts,
+                                    phase_usage_watts=phase_usage_watts,
+                                )
                                 phase_current_amps = usage_snapshot.phase_current_amps if usage_snapshot else None
                                 current_n_amps = usage_snapshot.current_n_amps if usage_snapshot else None
                                 live_preview_snapshot = _build_preview_snapshot_for_logging(
@@ -654,8 +672,8 @@ def main():
                                     phase_usage_watts=phase_usage_watts,
                                     phase_current_amps=phase_current_amps,
                                     current_n_amps=current_n_amps,
-                                    allow_negative=True,
-                                    allow_negative_phase=_allow_negative_phase_power_for_rewrite(),
+                                    allow_negative=False,
+                                    allow_negative_phase=False,
                                 )
                                 live_preview_signature = preview_signature(
                                     capture,
