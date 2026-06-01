@@ -49,6 +49,11 @@ operator-facing assumptions for `modbus-softsplit`.
     - `0x5B16..0x5B1B` to an equal 3-phase split of that total.
     - `0x5B0C..0x5B13` to derived non-negative phase currents from
       rewritten phase watts and ABB phase voltages; neutral current is `0`.
+- Optional home offset mode (`CERBO_SUBTRACT_PV_FROM_HOME_USAGE=1`) rewrites
+  slave `100` home/grid instantaneous active power as:
+  - `max(home_usage_watts - pv_total_watts, 0)`
+  - then spreads that remaining power evenly across slave `100`
+    `active_power_l1/l2/l3` words for consistency.
 - Preview logs should stay short and verifiable:
   - `ABB source: X W`
   - `Cerbo Usage to Maxem: Y W`
@@ -89,7 +94,8 @@ operator-facing assumptions for `modbus-softsplit`.
 - Startup should log effective Cerbo MQTT source settings and source precedence
   (`env` vs `.env` vs defaults).
 - Startup should log effective PV slave settings:
-  `CERBO_ENABLE_PV_SLAVE`, `CERBO_PV_TARGET_SLAVE`, and `CERBO_PV_TOPICS`.
+  `CERBO_ENABLE_PV_SLAVE`, `CERBO_PV_TARGET_SLAVE`, `CERBO_PV_TOPICS`,
+  and `CERBO_SUBTRACT_PV_FROM_HOME_USAGE`.
 - `CERBO_MQTT_PROTOCOL_DEBUG=0` should remain default so DEBUG logs stay operator-readable; enable only during MQTT wire troubleshooting.
 - `CERBO_MQTT_SNAPSHOT_DEBUG_INTERVAL_SECONDS=0` should remain default to prevent per-message snapshot log flooding.
 - The serving loop should remain timing-safe for the RTU client.

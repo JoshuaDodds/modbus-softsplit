@@ -108,6 +108,7 @@ CERBO_PV_TOPICS = _parse_csv_setting(
 )
 CERBO_ENABLE_PV_SLAVE = _parse_bool_setting("CERBO_ENABLE_PV_SLAVE", "1")
 CERBO_PV_TARGET_SLAVE = max(int(_get_setting("CERBO_PV_TARGET_SLAVE", "1")), 1)
+CERBO_SUBTRACT_PV_FROM_HOME_USAGE = _parse_bool_setting("CERBO_SUBTRACT_PV_FROM_HOME_USAGE", "1")
 CERBO_PHASE_POWER_SOURCE = _normalize_phase_power_source(_get_setting("CERBO_PHASE_POWER_SOURCE", "activein"))
 CERBO_FORCE_NONNEGATIVE_PHASE_POWER = _parse_bool_setting("CERBO_FORCE_NONNEGATIVE_PHASE_POWER", "0")
 CERBO_COHERENT_PHASE_FRAMES = _parse_bool_setting("CERBO_COHERENT_PHASE_FRAMES", "1")
@@ -209,6 +210,7 @@ def _log_source_effective_config() -> None:
         (
             "Cerbo MQTT source: host=%s(%s) port=%s(%s) ac_out_topic=%s(%s) ac_activein_topic=%s(%s) "
             "pv_topics=%s(%s) pv_slave_enabled=%s(%s) pv_target_slave=%s(%s) "
+            "subtract_pv_from_home_usage=%s(%s) "
             "phase_power_source=%s(%s) clamp_negative_phase_power=%s(%s) "
             "coherent_phase_frames=%s(%s) coherent_phase_frame_max_skew_seconds=%.2f(%s) "
             "protocol_debug=%s(%s) snapshot_debug_interval_seconds=%.2f(%s)"
@@ -227,6 +229,8 @@ def _log_source_effective_config() -> None:
         _get_setting_source("CERBO_ENABLE_PV_SLAVE"),
         CERBO_PV_TARGET_SLAVE,
         _get_setting_source("CERBO_PV_TARGET_SLAVE"),
+        int(CERBO_SUBTRACT_PV_FROM_HOME_USAGE),
+        _get_setting_source("CERBO_SUBTRACT_PV_FROM_HOME_USAGE"),
         CERBO_PHASE_POWER_SOURCE,
         _get_setting_source("CERBO_PHASE_POWER_SOURCE"),
         int(CERBO_FORCE_NONNEGATIVE_PHASE_POWER),
@@ -298,18 +302,22 @@ def _allow_negative_phase_power_for_rewrite() -> bool:
 
 def _build_preview_snapshot_for_logging(
     usage_snapshot,
+    usage_watts,
     phase_usage_watts,
 ):
     if usage_snapshot is None:
         return None
-    if phase_usage_watts is None:
-        return usage_snapshot
     return CerboMqttSnapshot(
         sequence=getattr(usage_snapshot, "sequence", 0),
-        ac_in_phase_watts=tuple(float(value) for value in phase_usage_watts),
-        ac_in_total_watts=getattr(usage_snapshot, "rewrite_usage_watts", 0.0),
+        ac_in_phase_watts=(
+            tuple(float(value) for value in phase_usage_watts)
+            if phase_usage_watts is not None
+            else getattr(usage_snapshot, "phase_usage_watts", None)
+        ),
+        ac_in_total_watts=float(usage_watts) if usage_watts is not None else getattr(usage_snapshot, "rewrite_usage_watts", 0.0),
         ac_out_phase_currents=getattr(usage_snapshot, "phase_current_amps", None),
         ac_out_current_n=getattr(usage_snapshot, "current_n_amps", None),
+        pv_total_watts=getattr(usage_snapshot, "pv_total_watts", None),
     )
 
 
@@ -320,6 +328,27 @@ def _snapshot_pv_total_watts(usage_snapshot) -> float | None:
     if pv_total_watts is None:
         return None
     return max(float(pv_total_watts), 0.0)
+
+
+def _apply_pv_offset_to_home_usage(
+    *,
+    usage_watts: float,
+    phase_usage_watts: tuple[float, float, float] | None,
+    usage_snapshot,
+) -> tuple[float, tuple[float, float, float] | None]:
+    if not CERBO_SUBTRACT_PV_FROM_HOME_USAGE:
+        return float(usage_watts), phase_usage_watts
+
+    pv_total_watts = _snapshot_pv_total_watts(usage_snapshot)
+    if pv_total_watts is None or pv_total_watts <= 0.0:
+        return float(usage_watts), phase_usage_watts
+
+    # Offset PV generation from the home/grid usage rewrite and floor at zero.
+    adjusted_usage_watts = max(float(usage_watts) - float(pv_total_watts), 0.0)
+
+    # Keep total/phase power coherent by spreading the remainder across L1/L2/L3.
+    adjusted_phase_usage_watts = split_total_watts_evenly(adjusted_usage_watts)
+    return adjusted_usage_watts, adjusted_phase_usage_watts
 
 
 def _pv_preview_signature(
@@ -500,10 +529,16 @@ def main():
                                 source_values=acload_values,
                                 usage_snapshot=preview_snapshot,
                             )
+                            usage_watts, phase_usage_watts = _apply_pv_offset_to_home_usage(
+                                usage_watts=float(usage_watts),
+                                phase_usage_watts=phase_usage_watts,
+                                usage_snapshot=preview_snapshot,
+                            )
                             phase_current_amps = preview_snapshot.phase_current_amps if preview_snapshot else None
                             current_n_amps = preview_snapshot.current_n_amps if preview_snapshot else None
                             preview_display_snapshot = _build_preview_snapshot_for_logging(
                                 preview_snapshot,
+                                usage_watts,
                                 phase_usage_watts,
                             )
                             rewritten_values = rewrite_instantaneous_values(
@@ -587,10 +622,16 @@ def main():
                                     source_values=acload_values,
                                     usage_snapshot=usage_snapshot,
                                 )
+                                usage_watts, phase_usage_watts = _apply_pv_offset_to_home_usage(
+                                    usage_watts=float(usage_watts),
+                                    phase_usage_watts=phase_usage_watts,
+                                    usage_snapshot=usage_snapshot,
+                                )
                                 phase_current_amps = usage_snapshot.phase_current_amps if usage_snapshot else None
                                 current_n_amps = usage_snapshot.current_n_amps if usage_snapshot else None
                                 live_preview_snapshot = _build_preview_snapshot_for_logging(
                                     usage_snapshot,
+                                    usage_watts,
                                     phase_usage_watts,
                                 )
                                 rewritten_values = rewrite_instantaneous_values(

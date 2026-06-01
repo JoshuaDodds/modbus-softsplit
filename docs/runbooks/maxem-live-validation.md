@@ -6,7 +6,7 @@ Validate that Maxem sees:
 
 - Home/grid power driven by Cerbo `Ac/ActiveIn` rewrite values.
 - Phase current safety behavior driven by Cerbo `Ac/Out` current signals.
-- (Optional) Solar meter slave `001` powered by summed Cerbo `solarcharger/.../Pv/.../P` topics.
+- (Optional) Solar meter slave `001` powered by Cerbo `N/48e7da878d35/system/0/Dc/Pv/Power`.
 
 ## Preconditions
 
@@ -17,6 +17,7 @@ Validate that Maxem sees:
 - If phase sign behavior is under investigation, explicitly record:
   - `CERBO_PHASE_POWER_SOURCE`
   - `CERBO_FORCE_NONNEGATIVE_PHASE_POWER`
+  - `CERBO_SUBTRACT_PV_FROM_HOME_USAGE`
   - `CERBO_COHERENT_PHASE_FRAMES`
   - `CERBO_COHERENT_PHASE_FRAME_MAX_SKEW_SECONDS`
 - If PV virtual meter is enabled, explicitly record:
