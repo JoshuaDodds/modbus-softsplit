@@ -1,0 +1,20 @@
+Rewritten words (all from maxem_home_usage.py (line 28) and rewrite logic (line 805)):
+0x5B14/0x5B15 (active_power_total, signed, 0.01 W)  
+
+Value = home_usage_watts - pv_total_watts when PV offset is enabled in main.py (line 346).  
+Can be negative.
+0x5B16/0x5B17 (active_power_l1, signed, 0.01 W)  
+0x5B18/0x5B19 (active_power_l2, signed, 0.01 W)  
+0x5B1A/0x5B1B (active_power_l3, signed, 0.01 W)  
+
+In current mode, these are the signed total spread across 3 phases in main.py (line 336).  
+
+If PV offset is off or no PV value is available, phase source falls back to CERBO_PHASE_POWER_SOURCE behavior in main.py (line 266).
+0x5B0C/0x5B0D (current_l1, unsigned, 0.01 A)  
+0x5B0E/0x5B0F (current_l2, unsigned, 0.01 A)  
+0x5B10/0x5B11 (current_l3, unsigned, 0.01 A)  
+
+From Cerbo Ac/Out phase currents (non-negative) in main.py (line 643).
+0x5B12/0x5B13 (current_n, unsigned, 0.01 A)  
+
+From Cerbo neutral current if present; if missing, this pair is left as source value by the rewrite function in maxem_home_usage.py (line 843).

@@ -296,8 +296,9 @@ def _resolve_phase_usage_watts_for_rewrite(
 
 def _allow_negative_phase_power_for_rewrite() -> bool:
     if CERBO_SUBTRACT_PV_FROM_HOME_USAGE:
-        # In home-PV offset mode phase power words must be allowed to go negative.
-        return True
+        # Keep only total power signed in home-PV offset mode.
+        # Phase power words are intentionally non-negative for Maxem stability.
+        return False
     if CERBO_FORCE_NONNEGATIVE_PHASE_POWER:
         return False
     return CERBO_PHASE_POWER_SOURCE == "activein"

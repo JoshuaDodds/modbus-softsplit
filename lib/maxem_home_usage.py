@@ -621,7 +621,8 @@ def _format_value(value: float | None, unit: str) -> str:
 def describe_instantaneous_preview_basis() -> str:
     return (
         "Preview basis: active_power_total (0x5B14/0x5B15) is rewritten from Cerbo Ac/ActiveIn total watts. "
-        "active_power_l1/l2/l3 (0x5B16..0x5B1B) follow CERBO_PHASE_POWER_SOURCE mode (activein, acout-derived, or abb passthrough). "
+        "active_power_l1/l2/l3 (0x5B16..0x5B1B) follow CERBO_PHASE_POWER_SOURCE mode "
+        "(activein, acout-derived, or abb passthrough), except home-PV offset mode keeps these phase words non-negative. "
         "current_l1/l2/l3/n (0x5B0C..0x5B13) are rewritten from Cerbo Ac/Out phase currents with non-negative clamp. "
         "All other registers in instantaneous_values are copied verbatim from the ABB source."
     )

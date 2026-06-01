@@ -589,10 +589,10 @@ class MaxemHomeUsageTests(unittest.TestCase):
         self.assertIsNotNone(adjusted_phase_usage)
         self.assertAlmostEqual(sum(adjusted_phase_usage), -800.0, places=6)
 
-    def test_allow_negative_phase_power_when_home_offset_enabled(self) -> None:
+    def test_disable_negative_phase_power_when_home_offset_enabled(self) -> None:
         with patch.object(runtime_main, "CERBO_SUBTRACT_PV_FROM_HOME_USAGE", True):
             with patch.object(runtime_main, "CERBO_FORCE_NONNEGATIVE_PHASE_POWER", True):
-                self.assertTrue(runtime_main._allow_negative_phase_power_for_rewrite())
+                self.assertFalse(runtime_main._allow_negative_phase_power_for_rewrite())
 
 
 if __name__ == "__main__":

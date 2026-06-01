@@ -69,8 +69,8 @@ your specific situation.
     The default topic is `N/48e7da878d35/system/0/Dc/Pv/Power`.
     The PV total is summed from configured topic(s) and written to the `instantaneous_values` active-power words on slave `001`.
     Phase power/current words for slave `001` are synthesized coherently from that total (equal split by phase, amps from ABB phase voltage).
-    When `CERBO_SUBTRACT_PV_FROM_HOME_USAGE=1`, PV watts are subtracted from slave `100` home/grid rewrite watts as a signed value,
-    and the signed remaining power is spread evenly across slave `100` L1/L2/L3 phase power words.
+    When `CERBO_SUBTRACT_PV_FROM_HOME_USAGE=1`, PV watts are subtracted from slave `100` home/grid rewrite watts as a signed value.
+    In this mode, `active_power_total` stays signed while `active_power_l1/l2/l3` are encoded as non-negative values.
     For this test model, non-instantaneous blocks on slave `001` are not mirrored from slave `100`.
   This keeps Maxem home/grid power semantics aligned with grid import/export while preserving AC-out current safety inputs
   used for EV phase protection.

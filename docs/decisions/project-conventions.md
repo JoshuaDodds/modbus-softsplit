@@ -51,9 +51,8 @@ operator-facing assumptions for `modbus-softsplit`.
       rewritten phase watts and ABB phase voltages; neutral current is `0`.
 - Optional home offset mode (`CERBO_SUBTRACT_PV_FROM_HOME_USAGE=1`) rewrites
   slave `100` home/grid instantaneous active power as:
-  - `home_usage_watts - pv_total_watts` (signed)
-  - then spreads that signed remaining power evenly across slave `100`
-    `active_power_l1/l2/l3` words for consistency.
+  - `home_usage_watts - pv_total_watts` (signed) in `active_power_total`.
+  - `active_power_l1/l2/l3` are written as non-negative values in this mode.
 - Preview logs should stay short and verifiable:
   - `ABB source: X W`
   - `Cerbo Usage to Maxem: Y W`
