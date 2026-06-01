@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import patch
 
+import main as runtime_main
+
 from lib.maxem_home_usage import (
     CerboMqttSnapshot,
     DomoticzUsageCache,
@@ -559,6 +561,38 @@ class MaxemHomeUsageTests(unittest.TestCase):
         self.assertAlmostEqual(snapshot.phase_usage_watts[0], 100.0, places=2)
         self.assertAlmostEqual(snapshot.phase_usage_watts[1], 200.0, places=2)
         self.assertAlmostEqual(snapshot.phase_usage_watts[2], 300.0, places=2)
+
+    def test_signed_total_split_preserves_negative_sum(self) -> None:
+        phase_watts = runtime_main._split_total_watts_evenly_signed(-450.0)
+
+        self.assertAlmostEqual(sum(phase_watts), -450.0, places=6)
+        self.assertAlmostEqual(phase_watts[0], -150.0, places=6)
+        self.assertAlmostEqual(phase_watts[1], -150.0, places=6)
+        self.assertAlmostEqual(phase_watts[2], -150.0, places=6)
+
+    def test_apply_pv_offset_to_home_usage_keeps_signed_result_and_phase_consistency(self) -> None:
+        snapshot = CerboMqttSnapshot(
+            sequence=1,
+            ac_in_phase_watts=(100.0, 200.0, 300.0),
+            ac_in_total_watts=600.0,
+            pv_total_watts=900.0,
+        )
+
+        with patch.object(runtime_main, "CERBO_SUBTRACT_PV_FROM_HOME_USAGE", True):
+            adjusted_usage, adjusted_phase_usage = runtime_main._apply_pv_offset_to_home_usage(
+                usage_watts=100.0,
+                phase_usage_watts=(10.0, 20.0, 70.0),
+                usage_snapshot=snapshot,
+            )
+
+        self.assertAlmostEqual(adjusted_usage, -800.0, places=6)
+        self.assertIsNotNone(adjusted_phase_usage)
+        self.assertAlmostEqual(sum(adjusted_phase_usage), -800.0, places=6)
+
+    def test_allow_negative_phase_power_when_home_offset_enabled(self) -> None:
+        with patch.object(runtime_main, "CERBO_SUBTRACT_PV_FROM_HOME_USAGE", True):
+            with patch.object(runtime_main, "CERBO_FORCE_NONNEGATIVE_PHASE_POWER", True):
+                self.assertTrue(runtime_main._allow_negative_phase_power_for_rewrite())
 
 
 if __name__ == "__main__":

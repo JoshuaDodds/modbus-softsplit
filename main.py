@@ -295,6 +295,9 @@ def _resolve_phase_usage_watts_for_rewrite(
 
 
 def _allow_negative_phase_power_for_rewrite() -> bool:
+    if CERBO_SUBTRACT_PV_FROM_HOME_USAGE:
+        # In home-PV offset mode phase power words must be allowed to go negative.
+        return True
     if CERBO_FORCE_NONNEGATIVE_PHASE_POWER:
         return False
     return CERBO_PHASE_POWER_SOURCE == "activein"
@@ -330,6 +333,16 @@ def _snapshot_pv_total_watts(usage_snapshot) -> float | None:
     return max(float(pv_total_watts), 0.0)
 
 
+def _split_total_watts_evenly_signed(total_watts: float) -> tuple[float, float, float]:
+    value = float(total_watts)
+    per_phase = value / 3.0
+    return (
+        per_phase,
+        per_phase,
+        value - (2.0 * per_phase),
+    )
+
+
 def _apply_pv_offset_to_home_usage(
     *,
     usage_watts: float,
@@ -343,11 +356,11 @@ def _apply_pv_offset_to_home_usage(
     if pv_total_watts is None or pv_total_watts <= 0.0:
         return float(usage_watts), phase_usage_watts
 
-    # Offset PV generation from the home/grid usage rewrite and floor at zero.
-    adjusted_usage_watts = max(float(usage_watts) - float(pv_total_watts), 0.0)
+    # Offset PV generation from home/grid usage rewrite; signed result is intentional.
+    adjusted_usage_watts = float(usage_watts) - float(pv_total_watts)
 
-    # Keep total/phase power coherent by spreading the remainder across L1/L2/L3.
-    adjusted_phase_usage_watts = split_total_watts_evenly(adjusted_usage_watts)
+    # Keep total/phase power coherent by spreading signed remainder across L1/L2/L3.
+    adjusted_phase_usage_watts = _split_total_watts_evenly_signed(adjusted_usage_watts)
     return adjusted_usage_watts, adjusted_phase_usage_watts
 
 

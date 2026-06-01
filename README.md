@@ -69,8 +69,8 @@ your specific situation.
     The default topic is `N/48e7da878d35/system/0/Dc/Pv/Power`.
     The PV total is summed from configured topic(s) and written to the `instantaneous_values` active-power words on slave `001`.
     Phase power/current words for slave `001` are synthesized coherently from that total (equal split by phase, amps from ABB phase voltage).
-    When `CERBO_SUBTRACT_PV_FROM_HOME_USAGE=1`, PV watts are subtracted from slave `100` home/grid rewrite watts with floor `>=0`,
-    and the remaining power is spread evenly across slave `100` L1/L2/L3 phase power words.
+    When `CERBO_SUBTRACT_PV_FROM_HOME_USAGE=1`, PV watts are subtracted from slave `100` home/grid rewrite watts as a signed value,
+    and the signed remaining power is spread evenly across slave `100` L1/L2/L3 phase power words.
     For this test model, non-instantaneous blocks on slave `001` are not mirrored from slave `100`.
   This keeps Maxem home/grid power semantics aligned with grid import/export while preserving AC-out current safety inputs
   used for EV phase protection.
@@ -106,7 +106,7 @@ your specific situation.
   - `CERBO_AC_OUT_TOPIC` (default `N/48e7da878d35/vebus/276/Ac/Out`)
   - `CERBO_AC_ACTIVEIN_TOPIC` (default `N/48e7da878d35/vebus/276/Ac/ActiveIn`)
   - `CERBO_PV_TOPICS` (default: `N/48e7da878d35/system/0/Dc/Pv/Power`; summed for virtual PV meter power)
-  - `CERBO_SUBTRACT_PV_FROM_HOME_USAGE` (default: `1`; subtract PV from slave `100` home/grid rewrite with floor `0`)
+  - `CERBO_SUBTRACT_PV_FROM_HOME_USAGE` (default: `1`; subtract PV from slave `100` home/grid rewrite as signed watts)
 - At `DEBUG` level the runtime logs snapshot updates from MQTT and preview lines (`ABB source` / `Cerbo ... to Maxem`).
 - To keep DEBUG readable by default:
   - `CERBO_MQTT_PROTOCOL_DEBUG=0` suppresses raw paho wire logs (`Sending CONNECT`, `Received PUBLISH`, etc).
