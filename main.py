@@ -104,7 +104,7 @@ CERBO_AC_OUT_TOPIC = _get_setting("CERBO_AC_OUT_TOPIC", "N/48e7da878d35/vebus/27
 CERBO_AC_ACTIVEIN_TOPIC = _get_setting("CERBO_AC_ACTIVEIN_TOPIC", "N/48e7da878d35/vebus/276/Ac/ActiveIn")
 CERBO_PV_TOPICS = _parse_csv_setting(
     "CERBO_PV_TOPICS",
-    "N/48e7da878d35/solarcharger/283/Pv/0/P,N/48e7da878d35/solarcharger/282/Pv/0/P,N/48e7da878d35/solarcharger/282/Pv/1/P",
+    "N/48e7da878d35/system/0/Dc/Pv/Power",
 )
 CERBO_ENABLE_PV_SLAVE = _parse_bool_setting("CERBO_ENABLE_PV_SLAVE", "1")
 CERBO_PV_TARGET_SLAVE = max(int(_get_setting("CERBO_PV_TARGET_SLAVE", "1")), 1)
@@ -411,6 +411,11 @@ def main():
                 "PV virtual meter disabled because CERBO_PV_TARGET_SLAVE=%s collides with existing slave addresses.",
                 CERBO_PV_TARGET_SLAVE,
             )
+        elif pv_slave_enabled_runtime:
+            logger.info(
+                "PV virtual meter slave %03d enabled: only instantaneous_values are synthesized; non-instantaneous blocks are not mirrored from slave 100.",
+                CERBO_PV_TARGET_SLAVE,
+            )
 
         if dry_run_maxem_home:
             logger.info(
@@ -653,8 +658,6 @@ def main():
                                     maxem_pv.set_values(register_name, addr, pv_rewritten_values)
                             else:
                                 maxem_100.set_values(register_name, addr, acload_values)
-                                if maxem_pv is not None:
-                                    maxem_pv.set_values(register_name, addr, acload_values)
                     if dry_run_maxem_home:
                         continue
 

@@ -23,6 +23,7 @@ Validate that Maxem sees:
   - `CERBO_ENABLE_PV_SLAVE`
   - `CERBO_PV_TARGET_SLAVE`
   - `CERBO_PV_TOPICS`
+  - whether non-instantaneous slave `001` blocks are intentionally left unsynthesized (current default behavior).
 
 ## Step 1: Offline Sanity Capture
 
@@ -82,7 +83,7 @@ When PV virtual meter is enabled:
 
 - Confirm Maxem autoconfig finds kWh meter address `001`.
 - Confirm logs show `Cerbo PV to Maxem (slave 001): ...`.
-- Confirm only slave `001` instantaneous words are rewritten for PV semantics; other blocks remain mirrored.
+- Confirm only slave `001` instantaneous words are rewritten for PV semantics; non-instantaneous blocks are not mirrored from slave `100`.
 
 ## Step 4: Long-Run Observation
 

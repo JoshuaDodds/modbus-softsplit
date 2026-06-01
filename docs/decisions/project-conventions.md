@@ -13,9 +13,7 @@ operator-facing assumptions for `modbus-softsplit`.
   - active-in topic base `N/48e7da878d35/vebus/276/Ac/ActiveIn`
   - ac-out topic base `N/48e7da878d35/vebus/276/Ac/Out`
   - pv topic list (`CERBO_PV_TOPICS`) defaults to:
-    - `N/48e7da878d35/solarcharger/283/Pv/0/P`
-    - `N/48e7da878d35/solarcharger/282/Pv/0/P`
-    - `N/48e7da878d35/solarcharger/282/Pv/1/P`
+    - `N/48e7da878d35/system/0/Dc/Pv/Power`
 - Power rewrite source:
   - `Ac/ActiveIn/L1|L2|L3/P` -> active power total + per phase words.
   - Values may be positive or negative.
@@ -45,7 +43,7 @@ operator-facing assumptions for `modbus-softsplit`.
   are mirrored unchanged from the ABB source.
 - Optional PV meter emulation (`CERBO_ENABLE_PV_SLAVE=1`) publishes a virtual
   Maxem-compatible slave (default address `001` via `CERBO_PV_TARGET_SLAVE`):
-  - all Maxem register blocks mirror ABB source values by default.
+  - non-instantaneous blocks are not mirrored from slave `100` (kept independent/zeroed unless explicitly synthesized).
   - in `instantaneous_values`, slave `001` rewrites:
     - `0x5B14/0x5B15` to summed PV watts from `CERBO_PV_TOPICS`.
     - `0x5B16..0x5B1B` to an equal 3-phase split of that total.
