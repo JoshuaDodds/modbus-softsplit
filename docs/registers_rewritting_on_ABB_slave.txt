@@ -28,10 +28,10 @@ Slave 001 (PV virtual meter path)
 Rewritten words in `instantaneous_values`:
 
 - `0x5B14/0x5B15` (`active_power_total`, signed, 0.01 W):
-  - Value: `-abs(PV_total_watts)` from configured Cerbo PV topic(s).
+  - Value: PV total from configured Cerbo PV topic(s), with sign controlled by `CERBO_PV_SIGN_NEGATIVE`.
 
 - `0x5B16/0x5B17` (`active_power_l1`, signed, 0.01 W):
-  - Value: same signed-negative value as `active_power_total` (single-phase mirror).
+  - Value: same sign-controlled value as `active_power_total` (single-phase mirror).
 
 - `0x5B18/0x5B19` (`active_power_l2`, signed, 0.01 W):
   - Value: `0`.

@@ -65,10 +65,12 @@ your specific situation.
     - `CERBO_ENABLE_PV_SLAVE=1`
     - `CERBO_PV_TARGET_SLAVE=1`
     - `CERBO_PV_TOPICS=<comma-separated topic list>`
-    - `CERBO_SUBTRACT_PV_FROM_HOME_USAGE=1`
+    - `CERBO_PV_SIGN_NEGATIVE=1`
+    - `CERBO_SUBTRACT_PV_FROM_HOME_USAGE=0`
     The default topic is `N/48e7da878d35/system/0/Dc/Pv/Power`.
     The PV total is summed from configured topic(s) and written to the `instantaneous_values` active-power words on slave `001`.
-    Slave `001` is currently modeled as single-phase: `active_power_total` is written as signed-negative PV watts, mirrored to `active_power_l1`, with `active_power_l2/l3=0`.
+    Slave `001` is currently modeled as single-phase: `active_power_total` is written as PV watts with the sign controlled by `CERBO_PV_SIGN_NEGATIVE`, mirrored to `active_power_l1`, with `active_power_l2/l3=0`.
+    `CERBO_PV_SIGN_NEGATIVE` controls whether slave `001` emits PV power as negative (`1`) or positive (`0`).
     When `CERBO_SUBTRACT_PV_FROM_HOME_USAGE=1`, PV watts are subtracted from slave `100` home/grid rewrite watts before unsigned encoding (floored at `0`).
     For this test model, non-instantaneous blocks on slave `001` are not mirrored from slave `100`.
   This keeps Maxem home/grid power semantics aligned with grid import/export while preserving AC-out current safety inputs
@@ -105,7 +107,8 @@ your specific situation.
   - `CERBO_AC_OUT_TOPIC` (default `N/48e7da878d35/vebus/276/Ac/Out`)
   - `CERBO_AC_ACTIVEIN_TOPIC` (default `N/48e7da878d35/vebus/276/Ac/ActiveIn`)
   - `CERBO_PV_TOPICS` (default: `N/48e7da878d35/system/0/Dc/Pv/Power`; summed for virtual PV meter power)
-  - `CERBO_SUBTRACT_PV_FROM_HOME_USAGE` (default: `1`; subtract PV from slave `100` home/grid rewrite before unsigned clamp)
+  - `CERBO_PV_SIGN_NEGATIVE` (default: `1`; emit slave `001` PV watts as negative when set, positive when `0`)
+  - `CERBO_SUBTRACT_PV_FROM_HOME_USAGE` (current test path: `0`; set to `1` only when you want PV offset applied to slave `100`)
 - At `DEBUG` level the runtime logs snapshot updates from MQTT and preview lines (`ABB source` / `Cerbo ... to Maxem`).
 - To keep DEBUG readable by default:
   - `CERBO_MQTT_PROTOCOL_DEBUG=0` suppresses raw paho wire logs (`Sending CONNECT`, `Received PUBLISH`, etc).

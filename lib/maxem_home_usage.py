@@ -623,6 +623,7 @@ def describe_instantaneous_preview_basis() -> str:
         "Preview basis: on slave 100, active_power_total (0x5B14/0x5B15) is rewritten from Cerbo Ac/ActiveIn total watts "
         "and encoded unsigned (negative clamped to 0). "
         "active_power_l1/l2/l3 (0x5B16..0x5B1B) follow CERBO_PHASE_POWER_SOURCE mode and are encoded unsigned per-phase. "
+        "On slave 001, PV power sign is controlled by CERBO_PV_SIGN_NEGATIVE. "
         "current_l1/l2/l3/n (0x5B0C..0x5B13) are rewritten from Cerbo Ac/Out phase currents with non-negative clamp. "
         "All other registers in instantaneous_values are copied verbatim from the ABB source."
     )
@@ -853,11 +854,12 @@ def rewrite_pv_instantaneous_values(
     source_values: Sequence[int],
     *,
     pv_total_watts: float | None,
+    pv_negative: bool = True,
 ) -> tuple[int, ...]:
     pv_watts = 0.0 if pv_total_watts is None else max(float(pv_total_watts), 0.0)
-    total_watts = -pv_watts
+    total_watts = -pv_watts if pv_negative else pv_watts
     # Single-phase PV model for Maxem slave 001:
-    # publish total PV as signed-negative power and mirror it onto L1 only.
+    # publish total PV as signed-negative or positive power and mirror it onto L1 only.
     phase_watts = (
         total_watts,
         0.0,
@@ -867,8 +869,8 @@ def rewrite_pv_instantaneous_values(
         source_values,
         usage_watts=total_watts,
         phase_usage_watts=phase_watts,
-        allow_negative=True,
-        allow_negative_phase=True,
+        allow_negative=pv_negative,
+        allow_negative_phase=pv_negative,
     )
 
 

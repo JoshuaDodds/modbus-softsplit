@@ -107,6 +107,7 @@ CERBO_PV_TOPICS = _parse_csv_setting(
 )
 CERBO_ENABLE_PV_SLAVE = _parse_bool_setting("CERBO_ENABLE_PV_SLAVE", "1")
 CERBO_PV_TARGET_SLAVE = max(int(_get_setting("CERBO_PV_TARGET_SLAVE", "1")), 1)
+CERBO_PV_SIGN_NEGATIVE = _parse_bool_setting("CERBO_PV_SIGN_NEGATIVE", "1")
 CERBO_SUBTRACT_PV_FROM_HOME_USAGE = _parse_bool_setting("CERBO_SUBTRACT_PV_FROM_HOME_USAGE", "1")
 CERBO_PHASE_POWER_SOURCE = _normalize_phase_power_source(_get_setting("CERBO_PHASE_POWER_SOURCE", "activein"))
 CERBO_FORCE_NONNEGATIVE_PHASE_POWER = _parse_bool_setting("CERBO_FORCE_NONNEGATIVE_PHASE_POWER", "0")
@@ -209,7 +210,7 @@ def _log_source_effective_config() -> None:
         (
             "Cerbo MQTT source: host=%s(%s) port=%s(%s) ac_out_topic=%s(%s) ac_activein_topic=%s(%s) "
             "pv_topics=%s(%s) pv_slave_enabled=%s(%s) pv_target_slave=%s(%s) "
-            "subtract_pv_from_home_usage=%s(%s) "
+            "pv_sign_negative=%s(%s) subtract_pv_from_home_usage=%s(%s) "
             "phase_power_source=%s(%s) clamp_negative_phase_power=%s(%s) "
             "coherent_phase_frames=%s(%s) coherent_phase_frame_max_skew_seconds=%.2f(%s) "
             "protocol_debug=%s(%s) snapshot_debug_interval_seconds=%.2f(%s)"
@@ -228,6 +229,8 @@ def _log_source_effective_config() -> None:
         _get_setting_source("CERBO_ENABLE_PV_SLAVE"),
         CERBO_PV_TARGET_SLAVE,
         _get_setting_source("CERBO_PV_TARGET_SLAVE"),
+        int(CERBO_PV_SIGN_NEGATIVE),
+        _get_setting_source("CERBO_PV_SIGN_NEGATIVE"),
         int(CERBO_SUBTRACT_PV_FROM_HOME_USAGE),
         _get_setting_source("CERBO_SUBTRACT_PV_FROM_HOME_USAGE"),
         CERBO_PHASE_POWER_SOURCE,
@@ -379,6 +382,7 @@ def _pv_preview_signature(
     capture: RegisterCapture,
     *,
     pv_total_watts: float | None,
+    pv_negative: bool,
 ) -> tuple[object, ...]:
     return (
         capture.target_slave,
@@ -388,6 +392,7 @@ def _pv_preview_signature(
         capture.address_length,
         capture.source_values,
         pv_total_watts,
+        pv_negative,
     )
 
 
@@ -395,11 +400,13 @@ def _format_pv_preview_lines(
     *,
     pv_target_slave: int,
     pv_total_watts: float | None,
+    pv_negative: bool,
 ) -> list[str]:
     if pv_total_watts is None:
         return [f"Cerbo PV to Maxem (slave {pv_target_slave:03d}): awaiting baseline"]
 
-    pv_signed_total_watts = -max(float(pv_total_watts), 0.0)
+    pv_raw_watts = max(float(pv_total_watts), 0.0)
+    pv_signed_total_watts = -pv_raw_watts if pv_negative else pv_raw_watts
     return [
         f"Cerbo PV to Maxem (slave {pv_target_slave:03d}): {pv_signed_total_watts:,.2f} W",
         (
@@ -607,10 +614,12 @@ def main():
                                 pv_rewritten_values = rewrite_pv_instantaneous_values(
                                     acload_values,
                                     pv_total_watts=pv_total_watts,
+                                    pv_negative=CERBO_PV_SIGN_NEGATIVE,
                                 )
                                 pv_preview_signature_value = _pv_preview_signature(
                                     pv_capture,
                                     pv_total_watts=pv_total_watts,
+                                    pv_negative=CERBO_PV_SIGN_NEGATIVE,
                                 )
                                 pv_preview_signature_key = (
                                     pv_capture.target_slave,
@@ -621,6 +630,7 @@ def main():
                                     for preview_line in _format_pv_preview_lines(
                                         pv_target_slave=CERBO_PV_TARGET_SLAVE,
                                         pv_total_watts=pv_total_watts,
+                                        pv_negative=CERBO_PV_SIGN_NEGATIVE,
                                     ):
                                         logger.debug(preview_line)
                                     if trace_instantaneous_payload:
@@ -705,10 +715,12 @@ def main():
                                     pv_rewritten_values = rewrite_pv_instantaneous_values(
                                         acload_values,
                                         pv_total_watts=pv_total_watts,
+                                        pv_negative=CERBO_PV_SIGN_NEGATIVE,
                                     )
                                     pv_preview_signature_value = _pv_preview_signature(
                                         pv_capture,
                                         pv_total_watts=pv_total_watts,
+                                        pv_negative=CERBO_PV_SIGN_NEGATIVE,
                                     )
                                     pv_preview_signature_key = (
                                         pv_capture.target_slave,
@@ -719,6 +731,7 @@ def main():
                                         for preview_line in _format_pv_preview_lines(
                                             pv_target_slave=CERBO_PV_TARGET_SLAVE,
                                             pv_total_watts=pv_total_watts,
+                                            pv_negative=CERBO_PV_SIGN_NEGATIVE,
                                         ):
                                             logger.debug(preview_line)
                                         if trace_instantaneous_payload:

@@ -49,8 +49,8 @@ operator-facing assumptions for `modbus-softsplit`.
   Maxem-compatible slave (default address `001` via `CERBO_PV_TARGET_SLAVE`):
   - non-instantaneous blocks are not mirrored from slave `100` (kept independent/zeroed unless explicitly synthesized).
   - in `instantaneous_values`, slave `001` rewrites:
-    - `0x5B14/0x5B15` to `-abs(PV_total_watts)` from `CERBO_PV_TOPICS` (signed).
-    - `0x5B16/0x5B17` to the same signed-negative value (single-phase L1 mirror).
+    - `0x5B14/0x5B15` to PV watts from `CERBO_PV_TOPICS` with sign controlled by `CERBO_PV_SIGN_NEGATIVE`.
+    - `0x5B16/0x5B17` to the same sign-controlled single-phase L1 value.
     - `0x5B18..0x5B1B` to `0` (L2/L3 power words).
     - current words are not rewritten by the PV helper in this model.
 - Optional home offset mode (`CERBO_SUBTRACT_PV_FROM_HOME_USAGE=1`) rewrites
@@ -58,6 +58,7 @@ operator-facing assumptions for `modbus-softsplit`.
   - `home_usage_watts - pv_total_watts` before unsigned encoding.
   - write result to `active_power_total` with floor at `0`.
   - write phase powers with per-phase floor at `0`.
+  - The current 100/001 split test path keeps this disabled (`CERBO_SUBTRACT_PV_FROM_HOME_USAGE=0`).
 - Preview logs should stay short and verifiable:
   - `ABB source: X W`
   - `Cerbo Usage to Maxem: Y W`
@@ -99,7 +100,7 @@ operator-facing assumptions for `modbus-softsplit`.
   (`env` vs `.env` vs defaults).
 - Startup should log effective PV slave settings:
   `CERBO_ENABLE_PV_SLAVE`, `CERBO_PV_TARGET_SLAVE`, `CERBO_PV_TOPICS`,
-  and `CERBO_SUBTRACT_PV_FROM_HOME_USAGE`.
+  `CERBO_PV_SIGN_NEGATIVE`, and `CERBO_SUBTRACT_PV_FROM_HOME_USAGE`.
 - `CERBO_MQTT_PROTOCOL_DEBUG=0` should remain default so DEBUG logs stay operator-readable; enable only during MQTT wire troubleshooting.
 - `CERBO_MQTT_SNAPSHOT_DEBUG_INTERVAL_SECONDS=0` should remain default to prevent per-message snapshot log flooding.
 - The serving loop should remain timing-safe for the RTU client.
