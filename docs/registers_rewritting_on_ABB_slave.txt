@@ -21,6 +21,13 @@ Rewritten words in `instantaneous_values`:
   - Source: Cerbo `Ac/Out` currents.
   - Encoding mode: unsigned write (non-negative clamp).
 
+Optional diagnostic mode:
+
+- `CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER=1`
+  - `0x5B14/0x5B15` stays signed total power.
+  - `0x5B16..0x5B1B` become a signed equal split of that same total.
+  - Current words stay unsigned and are still sourced from Cerbo `Ac/Out`.
+
 All other words for slave `100` are mirrored from upstream ABB.
 
 Slave 001 (PV virtual meter path)

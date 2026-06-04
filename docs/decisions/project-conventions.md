@@ -43,6 +43,10 @@ operator-facing assumptions for `modbus-softsplit`.
   - total power negative values are clamped to `0`.
   - phase power negative values are clamped to `0`.
   - currents are clamped to `>=0`.
+- `CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER=1` is an opt-in diagnostic mode for slave `100` instantaneous active-power words only:
+  - `0x5B14/0x5B15` is written as signed total power.
+  - `0x5B16..0x5B1B` are written as a signed equal split of that same total.
+  - current words remain unsigned and still come from Cerbo `Ac/Out`.
 - All other words in `instantaneous_values` and all other Maxem register blocks
   are mirrored unchanged from the ABB source.
 - Optional PV meter emulation (`CERBO_ENABLE_PV_SLAVE=1`) publishes a virtual

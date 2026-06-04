@@ -17,6 +17,7 @@ Validate that Maxem sees:
 - If phase sign behavior is under investigation, explicitly record:
   - `CERBO_PHASE_POWER_SOURCE`
   - `CERBO_FORCE_NONNEGATIVE_PHASE_POWER`
+  - `CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER`
   - `CERBO_SUBTRACT_PV_FROM_HOME_USAGE`
   - `CERBO_COHERENT_PHASE_FRAMES`
   - `CERBO_COHERENT_PHASE_FRAME_MAX_SKEW_SECONDS`
@@ -49,6 +50,7 @@ Expected:
   - `0x5B16..0x5B1B` (phase L1/L2/L3 power)
 - Voltage fields remain unchanged unless source changed.
 - On slave `100`, power rewrite writes are unsigned-clamped (`<0` -> `0`).
+- If `CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER=1`, slave `100` active-power words are signed and the phase words are an equal split of the same total.
 - For the current 100/001 split test path, keep `CERBO_SUBTRACT_PV_FROM_HOME_USAGE=0`.
 - Current rewrite values are clamped to non-negative (Cerbo `Ac/Out`).
 
@@ -118,3 +120,4 @@ Validation pass is considered successful when:
 - Rewritten words match design (`0x5B0C..0x5B1B` for current+active-power fields only).
 - Maxem dashboard behavior aligns with intended Home/Grid semantics across multiple load conditions.
 - Service remains stable over long-running periods.
+- If you are testing the signed instantaneous mode, repeat the live trace once with `CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER=1` and compare it to the unsigned baseline.

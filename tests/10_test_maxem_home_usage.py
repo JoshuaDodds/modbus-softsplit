@@ -405,6 +405,7 @@ class MaxemHomeUsageTests(unittest.TestCase):
 
         self.assertIn("active_power_total (0x5B14/0x5B15)", message)
         self.assertIn("CERBO_PHASE_POWER_SOURCE", message)
+        self.assertIn("CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER", message)
         self.assertIn("CERBO_PV_SIGN_NEGATIVE", message)
         self.assertIn("Ac/ActiveIn", message)
         self.assertIn("Ac/Out", message)
@@ -605,6 +606,41 @@ class MaxemHomeUsageTests(unittest.TestCase):
         self.assertAlmostEqual(adjusted_usage, -800.0, places=6)
         self.assertIsNotNone(adjusted_phase_usage)
         self.assertAlmostEqual(sum(adjusted_phase_usage), -800.0, places=6)
+
+    def test_prepare_home_instantaneous_power_for_rewrite_can_keep_signed_total_and_equal_split(self) -> None:
+        with patch.object(runtime_main, "CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER", True):
+            usage_watts, phase_usage_watts, allow_negative, allow_negative_phase = (
+                runtime_main._prepare_home_instantaneous_power_for_rewrite(
+                    usage_watts=-450.0,
+                    phase_usage_watts=(10.0, 20.0, 30.0),
+                )
+            )
+
+        self.assertAlmostEqual(usage_watts, -450.0, places=6)
+        self.assertTrue(allow_negative)
+        self.assertTrue(allow_negative_phase)
+        self.assertIsNotNone(phase_usage_watts)
+        self.assertAlmostEqual(sum(phase_usage_watts), -450.0, places=6)
+        self.assertAlmostEqual(phase_usage_watts[0], -150.0, places=6)
+        self.assertAlmostEqual(phase_usage_watts[1], -150.0, places=6)
+        self.assertAlmostEqual(phase_usage_watts[2], -150.0, places=6)
+
+    def test_prepare_home_instantaneous_power_for_rewrite_clamps_when_signed_mode_is_off(self) -> None:
+        with patch.object(runtime_main, "CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER", False):
+            usage_watts, phase_usage_watts, allow_negative, allow_negative_phase = (
+                runtime_main._prepare_home_instantaneous_power_for_rewrite(
+                    usage_watts=-450.0,
+                    phase_usage_watts=(-10.0, 20.0, -30.0),
+                )
+            )
+
+        self.assertAlmostEqual(usage_watts, 0.0, places=6)
+        self.assertFalse(allow_negative)
+        self.assertFalse(allow_negative_phase)
+        self.assertIsNotNone(phase_usage_watts)
+        self.assertAlmostEqual(phase_usage_watts[0], 0.0, places=6)
+        self.assertAlmostEqual(phase_usage_watts[1], 20.0, places=6)
+        self.assertAlmostEqual(phase_usage_watts[2], 0.0, places=6)
 
     def test_disable_negative_phase_power_when_home_offset_enabled(self) -> None:
         with patch.object(runtime_main, "CERBO_SUBTRACT_PV_FROM_HOME_USAGE", True):

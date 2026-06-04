@@ -620,9 +620,10 @@ def _format_value(value: float | None, unit: str) -> str:
 
 def describe_instantaneous_preview_basis() -> str:
     return (
-        "Preview basis: on slave 100, active_power_total (0x5B14/0x5B15) is rewritten from Cerbo Ac/ActiveIn total watts "
-        "and encoded unsigned (negative clamped to 0). "
-        "active_power_l1/l2/l3 (0x5B16..0x5B1B) follow CERBO_PHASE_POWER_SOURCE mode and are encoded unsigned per-phase. "
+        "Preview basis: on slave 100, active_power_total (0x5B14/0x5B15) is rewritten from Cerbo Ac/ActiveIn total watts. "
+        "It is unsigned by default and can be signed when CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER=1. "
+        "When signed mode is enabled, active_power_l1/l2/l3 (0x5B16..0x5B1B) are a signed equal split of the total. "
+        "When signed mode is disabled, active_power_l1/l2/l3 follow CERBO_PHASE_POWER_SOURCE mode and are encoded unsigned per-phase. "
         "On slave 001, PV power sign is controlled by CERBO_PV_SIGN_NEGATIVE. "
         "current_l1/l2/l3/n (0x5B0C..0x5B13) are rewritten from Cerbo Ac/Out phase currents with non-negative clamp. "
         "All other registers in instantaneous_values are copied verbatim from the ABB source."

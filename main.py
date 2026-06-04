@@ -108,6 +108,7 @@ CERBO_PV_TOPICS = _parse_csv_setting(
 CERBO_ENABLE_PV_SLAVE = _parse_bool_setting("CERBO_ENABLE_PV_SLAVE", "1")
 CERBO_PV_TARGET_SLAVE = max(int(_get_setting("CERBO_PV_TARGET_SLAVE", "1")), 1)
 CERBO_PV_SIGN_NEGATIVE = _parse_bool_setting("CERBO_PV_SIGN_NEGATIVE", "1")
+CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER = _parse_bool_setting("CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER", "0")
 CERBO_SUBTRACT_PV_FROM_HOME_USAGE = _parse_bool_setting("CERBO_SUBTRACT_PV_FROM_HOME_USAGE", "1")
 CERBO_PHASE_POWER_SOURCE = _normalize_phase_power_source(_get_setting("CERBO_PHASE_POWER_SOURCE", "activein"))
 CERBO_FORCE_NONNEGATIVE_PHASE_POWER = _parse_bool_setting("CERBO_FORCE_NONNEGATIVE_PHASE_POWER", "0")
@@ -210,7 +211,7 @@ def _log_source_effective_config() -> None:
         (
             "Cerbo MQTT source: host=%s(%s) port=%s(%s) ac_out_topic=%s(%s) ac_activein_topic=%s(%s) "
             "pv_topics=%s(%s) pv_slave_enabled=%s(%s) pv_target_slave=%s(%s) "
-            "pv_sign_negative=%s(%s) subtract_pv_from_home_usage=%s(%s) "
+            "pv_sign_negative=%s(%s) signed_instantaneous_power=%s(%s) subtract_pv_from_home_usage=%s(%s) "
             "phase_power_source=%s(%s) clamp_negative_phase_power=%s(%s) "
             "coherent_phase_frames=%s(%s) coherent_phase_frame_max_skew_seconds=%.2f(%s) "
             "protocol_debug=%s(%s) snapshot_debug_interval_seconds=%.2f(%s)"
@@ -231,6 +232,8 @@ def _log_source_effective_config() -> None:
         _get_setting_source("CERBO_PV_TARGET_SLAVE"),
         int(CERBO_PV_SIGN_NEGATIVE),
         _get_setting_source("CERBO_PV_SIGN_NEGATIVE"),
+        int(CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER),
+        _get_setting_source("CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER"),
         int(CERBO_SUBTRACT_PV_FROM_HOME_USAGE),
         _get_setting_source("CERBO_SUBTRACT_PV_FROM_HOME_USAGE"),
         CERBO_PHASE_POWER_SOURCE,
@@ -297,6 +300,10 @@ def _resolve_phase_usage_watts_for_rewrite(
 
 
 def _allow_negative_phase_power_for_rewrite() -> bool:
+    if CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER:
+        # Signed instantaneous mode intentionally allows negative phase words as
+        # part of the same split used for the total active-power rewrite.
+        return True
     if CERBO_SUBTRACT_PV_FROM_HOME_USAGE:
         # Keep only total power signed in home-PV offset mode.
         # Phase power words are intentionally non-negative for Maxem stability.
@@ -376,6 +383,23 @@ def _clamp_unsigned_usage_for_rewrite(
     if phase_usage_watts is None:
         return clamped_usage_watts, None
     return clamped_usage_watts, tuple(max(float(value), 0.0) for value in phase_usage_watts)
+
+
+def _prepare_home_instantaneous_power_for_rewrite(
+    *,
+    usage_watts: float,
+    phase_usage_watts: tuple[float, float, float] | None,
+) -> tuple[float, tuple[float, float, float] | None, bool, bool]:
+    if CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER:
+        signed_usage_watts = float(usage_watts)
+        signed_phase_usage_watts = _split_total_watts_evenly_signed(signed_usage_watts)
+        return signed_usage_watts, signed_phase_usage_watts, True, True
+
+    clamped_usage_watts, clamped_phase_usage_watts = _clamp_unsigned_usage_for_rewrite(
+        usage_watts=usage_watts,
+        phase_usage_watts=phase_usage_watts,
+    )
+    return clamped_usage_watts, clamped_phase_usage_watts, False, False
 
 
 def _pv_preview_signature(
@@ -565,7 +589,12 @@ def main():
                                 phase_usage_watts=phase_usage_watts,
                                 usage_snapshot=preview_snapshot,
                             )
-                            usage_watts, phase_usage_watts = _clamp_unsigned_usage_for_rewrite(
+                            (
+                                usage_watts,
+                                phase_usage_watts,
+                                allow_negative,
+                                allow_negative_phase,
+                            ) = _prepare_home_instantaneous_power_for_rewrite(
                                 usage_watts=usage_watts,
                                 phase_usage_watts=phase_usage_watts,
                             )
@@ -582,8 +611,8 @@ def main():
                                 phase_usage_watts=phase_usage_watts,
                                 phase_current_amps=phase_current_amps,
                                 current_n_amps=current_n_amps,
-                                allow_negative=False,
-                                allow_negative_phase=False,
+                                allow_negative=allow_negative,
+                                allow_negative_phase=allow_negative_phase,
                             )
                             preview_signature_value = preview_signature(
                                 capture,
@@ -665,7 +694,12 @@ def main():
                                     phase_usage_watts=phase_usage_watts,
                                     usage_snapshot=usage_snapshot,
                                 )
-                                usage_watts, phase_usage_watts = _clamp_unsigned_usage_for_rewrite(
+                                (
+                                    usage_watts,
+                                    phase_usage_watts,
+                                    allow_negative,
+                                    allow_negative_phase,
+                                ) = _prepare_home_instantaneous_power_for_rewrite(
                                     usage_watts=usage_watts,
                                     phase_usage_watts=phase_usage_watts,
                                 )
@@ -682,8 +716,8 @@ def main():
                                     phase_usage_watts=phase_usage_watts,
                                     phase_current_amps=phase_current_amps,
                                     current_n_amps=current_n_amps,
-                                    allow_negative=False,
-                                    allow_negative_phase=False,
+                                    allow_negative=allow_negative,
+                                    allow_negative_phase=allow_negative_phase,
                                 )
                                 live_preview_signature = preview_signature(
                                     capture,

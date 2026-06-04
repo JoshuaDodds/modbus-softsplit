@@ -61,6 +61,7 @@ your specific situation.
     - `abb` leaves phase-power words unchanged from ABB passthrough.
   - `CERBO_COHERENT_PHASE_FRAMES=1` publishes snapshots only after complete 3-phase updates for both
     `Ac/ActiveIn` and `Ac/Out`, reducing mixed-time phase combinations.
+  - `CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER=1` enables signed `instantaneous_values` rewrites on slave `100` for the active-power words only. In that mode `active_power_total` is written signed and `active_power_l1/l2/l3` are a signed equal split of the same total.
   - Optional virtual PV meter emulation for Maxem slave `001` is available via:
     - `CERBO_ENABLE_PV_SLAVE=1`
     - `CERBO_PV_TARGET_SLAVE=1`
