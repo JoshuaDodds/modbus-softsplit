@@ -6,7 +6,7 @@ Validate that Maxem sees:
 
 - Home/grid power driven by Cerbo `Ac/ActiveIn` rewrite values.
 - Phase current safety behavior driven by Cerbo `Ac/Out` current signals.
-- (Optional) Solar meter slave `001` powered by summed Cerbo `solarcharger/.../Pv/.../P` topics.
+- (Optional) Solar meter slave `001` powered by Cerbo `N/48e7da878d35/system/0/Dc/Pv/Power`.
 
 ## Preconditions
 
@@ -17,12 +17,16 @@ Validate that Maxem sees:
 - If phase sign behavior is under investigation, explicitly record:
   - `CERBO_PHASE_POWER_SOURCE`
   - `CERBO_FORCE_NONNEGATIVE_PHASE_POWER`
+  - `CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER`
+  - `CERBO_SUBTRACT_PV_FROM_HOME_USAGE`
   - `CERBO_COHERENT_PHASE_FRAMES`
   - `CERBO_COHERENT_PHASE_FRAME_MAX_SKEW_SECONDS`
 - If PV virtual meter is enabled, explicitly record:
   - `CERBO_ENABLE_PV_SLAVE`
   - `CERBO_PV_TARGET_SLAVE`
   - `CERBO_PV_TOPICS`
+  - `CERBO_PV_SIGN_NEGATIVE`
+  - whether non-instantaneous slave `001` blocks are intentionally left unsynthesized (current default behavior).
 
 ## Step 1: Offline Sanity Capture
 
@@ -45,7 +49,9 @@ Expected:
   - `0x5B14, 0x5B15` (total power)
   - `0x5B16..0x5B1B` (phase L1/L2/L3 power)
 - Voltage fields remain unchanged unless source changed.
-- Power rewrite values can be positive or negative (Cerbo `Ac/ActiveIn`).
+- On slave `100`, power rewrite writes are unsigned-clamped (`<0` -> `0`).
+- If `CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER=1`, slave `100` active-power words are signed and the phase words are an equal split of the same total.
+- For the current 100/001 split test path, keep `CERBO_SUBTRACT_PV_FROM_HOME_USAGE=0`.
 - Current rewrite values are clamped to non-negative (Cerbo `Ac/Out`).
 
 ## Step 2: Live Runtime with Trace
@@ -82,7 +88,11 @@ When PV virtual meter is enabled:
 
 - Confirm Maxem autoconfig finds kWh meter address `001`.
 - Confirm logs show `Cerbo PV to Maxem (slave 001): ...`.
-- Confirm only slave `001` instantaneous words are rewritten for PV semantics; other blocks remain mirrored.
+- Confirm slave `001` PV semantics:
+  - `active_power_total` follows `CERBO_PV_SIGN_NEGATIVE`.
+  - `active_power_l1` mirrors that same sign choice.
+  - `active_power_l2/l3` are `0`.
+- Confirm only slave `001` instantaneous words are rewritten for PV semantics; non-instantaneous blocks are not mirrored from slave `100`.
 
 ## Step 4: Long-Run Observation
 
@@ -110,3 +120,4 @@ Validation pass is considered successful when:
 - Rewritten words match design (`0x5B0C..0x5B1B` for current+active-power fields only).
 - Maxem dashboard behavior aligns with intended Home/Grid semantics across multiple load conditions.
 - Service remains stable over long-running periods.
+- If you are testing the signed instantaneous mode, repeat the live trace once with `CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER=1` and compare it to the unsigned baseline.

@@ -13,12 +13,10 @@ operator-facing assumptions for `modbus-softsplit`.
   - active-in topic base `N/48e7da878d35/vebus/276/Ac/ActiveIn`
   - ac-out topic base `N/48e7da878d35/vebus/276/Ac/Out`
   - pv topic list (`CERBO_PV_TOPICS`) defaults to:
-    - `N/48e7da878d35/solarcharger/283/Pv/0/P`
-    - `N/48e7da878d35/solarcharger/282/Pv/0/P`
-    - `N/48e7da878d35/solarcharger/282/Pv/1/P`
+    - `N/48e7da878d35/system/0/Dc/Pv/Power`
 - Power rewrite source:
   - `Ac/ActiveIn/L1|L2|L3/P` -> active power total + per phase words.
-  - Values may be positive or negative.
+  - Source values may be positive or negative, but slave `100` writes are unsigned-clamped.
 - `CERBO_PHASE_POWER_SOURCE` controls phase-power words (`0x5B16..0x5B1B`):
   - `activein` -> phase power from Cerbo `Ac/ActiveIn` (signed).
   - `acout` -> phase power derived from ABB phase voltages and Cerbo `Ac/Out` currents.
@@ -41,16 +39,30 @@ operator-facing assumptions for `modbus-softsplit`.
   - `0x5B14/0x5B15` active power total from Cerbo `Ac/ActiveIn`.
   - `0x5B16/0x5B17`, `0x5B18/0x5B19`, `0x5B1A/0x5B1B`
     active power per-phase from `CERBO_PHASE_POWER_SOURCE`.
+- On slave `100`, all rewritten current/power fields are written as unsigned values:
+  - total power negative values are clamped to `0`.
+  - phase power negative values are clamped to `0`.
+  - currents are clamped to `>=0`.
+- `CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER=1` is an opt-in diagnostic mode for slave `100` instantaneous active-power words only:
+  - `0x5B14/0x5B15` is written as signed total power.
+  - `0x5B16..0x5B1B` are written as a signed equal split of that same total.
+  - current words remain unsigned and still come from Cerbo `Ac/Out`.
 - All other words in `instantaneous_values` and all other Maxem register blocks
   are mirrored unchanged from the ABB source.
 - Optional PV meter emulation (`CERBO_ENABLE_PV_SLAVE=1`) publishes a virtual
   Maxem-compatible slave (default address `001` via `CERBO_PV_TARGET_SLAVE`):
-  - all Maxem register blocks mirror ABB source values by default.
+  - non-instantaneous blocks are not mirrored from slave `100` (kept independent/zeroed unless explicitly synthesized).
   - in `instantaneous_values`, slave `001` rewrites:
-    - `0x5B14/0x5B15` to summed PV watts from `CERBO_PV_TOPICS`.
-    - `0x5B16..0x5B1B` to an equal 3-phase split of that total.
-    - `0x5B0C..0x5B13` to derived non-negative phase currents from
-      rewritten phase watts and ABB phase voltages; neutral current is `0`.
+    - `0x5B14/0x5B15` to PV watts from `CERBO_PV_TOPICS` with sign controlled by `CERBO_PV_SIGN_NEGATIVE`.
+    - `0x5B16/0x5B17` to the same sign-controlled single-phase L1 value.
+    - `0x5B18..0x5B1B` to `0` (L2/L3 power words).
+    - current words are not rewritten by the PV helper in this model.
+- Optional home offset mode (`CERBO_SUBTRACT_PV_FROM_HOME_USAGE=1`) rewrites
+  slave `100` home/grid instantaneous active power as:
+  - `home_usage_watts - pv_total_watts` before unsigned encoding.
+  - write result to `active_power_total` with floor at `0`.
+  - write phase powers with per-phase floor at `0`.
+  - The current 100/001 split test path keeps this disabled (`CERBO_SUBTRACT_PV_FROM_HOME_USAGE=0`).
 - Preview logs should stay short and verifiable:
   - `ABB source: X W`
   - `Cerbo Usage to Maxem: Y W`
@@ -91,7 +103,8 @@ operator-facing assumptions for `modbus-softsplit`.
 - Startup should log effective Cerbo MQTT source settings and source precedence
   (`env` vs `.env` vs defaults).
 - Startup should log effective PV slave settings:
-  `CERBO_ENABLE_PV_SLAVE`, `CERBO_PV_TARGET_SLAVE`, and `CERBO_PV_TOPICS`.
+  `CERBO_ENABLE_PV_SLAVE`, `CERBO_PV_TARGET_SLAVE`, `CERBO_PV_TOPICS`,
+  `CERBO_PV_SIGN_NEGATIVE`, and `CERBO_SUBTRACT_PV_FROM_HOME_USAGE`.
 - `CERBO_MQTT_PROTOCOL_DEBUG=0` should remain default so DEBUG logs stay operator-readable; enable only during MQTT wire troubleshooting.
 - `CERBO_MQTT_SNAPSHOT_DEBUG_INTERVAL_SECONDS=0` should remain default to prevent per-message snapshot log flooding.
 - The serving loop should remain timing-safe for the RTU client.

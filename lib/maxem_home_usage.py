@@ -620,8 +620,11 @@ def _format_value(value: float | None, unit: str) -> str:
 
 def describe_instantaneous_preview_basis() -> str:
     return (
-        "Preview basis: active_power_total (0x5B14/0x5B15) is rewritten from Cerbo Ac/ActiveIn total watts. "
-        "active_power_l1/l2/l3 (0x5B16..0x5B1B) follow CERBO_PHASE_POWER_SOURCE mode (activein, acout-derived, or abb passthrough). "
+        "Preview basis: on slave 100, active_power_total (0x5B14/0x5B15) is rewritten from Cerbo Ac/ActiveIn total watts. "
+        "It is unsigned by default and can be signed when CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER=1. "
+        "When signed mode is enabled, active_power_l1/l2/l3 (0x5B16..0x5B1B) are a signed equal split of the total. "
+        "When signed mode is disabled, active_power_l1/l2/l3 follow CERBO_PHASE_POWER_SOURCE mode and are encoded unsigned per-phase. "
+        "On slave 001, PV power sign is controlled by CERBO_PV_SIGN_NEGATIVE. "
         "current_l1/l2/l3/n (0x5B0C..0x5B13) are rewritten from Cerbo Ac/Out phase currents with non-negative clamp. "
         "All other registers in instantaneous_values are copied verbatim from the ABB source."
     )
@@ -852,18 +855,23 @@ def rewrite_pv_instantaneous_values(
     source_values: Sequence[int],
     *,
     pv_total_watts: float | None,
+    pv_negative: bool = True,
 ) -> tuple[int, ...]:
-    phase_watts = split_total_watts_evenly(pv_total_watts)
-    phase_currents = derive_phase_currents_from_watts(source_values, phase_watts)
-    total_watts = 0.0 if pv_total_watts is None else max(float(pv_total_watts), 0.0)
+    pv_watts = 0.0 if pv_total_watts is None else max(float(pv_total_watts), 0.0)
+    total_watts = -pv_watts if pv_negative else pv_watts
+    # Single-phase PV model for Maxem slave 001:
+    # publish total PV as signed-negative or positive power and mirror it onto L1 only.
+    phase_watts = (
+        total_watts,
+        0.0,
+        0.0,
+    )
     return rewrite_instantaneous_values(
         source_values,
         usage_watts=total_watts,
         phase_usage_watts=phase_watts,
-        phase_current_amps=phase_currents,
-        current_n_amps=0.0,
-        allow_negative=False,
-        allow_negative_phase=False,
+        allow_negative=pv_negative,
+        allow_negative_phase=pv_negative,
     )
 
 

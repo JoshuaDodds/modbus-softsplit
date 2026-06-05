@@ -50,8 +50,8 @@ your specific situation.
   These lines are emitted at `DEBUG` level (set `LOG_LEVEL=DEBUG` when you want them).
 - The active rewrite story now reads directly from Victron CerboGX MQTT (read-only) and rewrites selected words in
   ABB `instantaneous_values` while mirroring all other words verbatim.
-  - `active_power_total` (`0x5B14/0x5B15`) is sourced from `Ac/ActiveIn` total watts.
-  - `active_power_l1/l2/l3` (`0x5B16..0x5B1B`) follow `CERBO_PHASE_POWER_SOURCE`.
+  - `active_power_total` (`0x5B14/0x5B15`) is sourced from `Ac/ActiveIn` total watts and encoded as unsigned on slave `100` (negative clamped to `0`).
+  - `active_power_l1/l2/l3` (`0x5B16..0x5B1B`) follow `CERBO_PHASE_POWER_SOURCE` and are encoded as unsigned on slave `100` (per-phase negative clamped to `0`).
   - `current_l1/l2/l3/n` (`0x5B0C..0x5B13`) are sourced from `Ac/Out` phase currents.
   - `Ac/ActiveIn` values may be positive or negative; `Ac/Out` currents are clamped to non-negative values.
   - `CERBO_PHASE_POWER_SOURCE` can pivot phase-power behavior without code edits:
@@ -61,12 +61,19 @@ your specific situation.
     - `abb` leaves phase-power words unchanged from ABB passthrough.
   - `CERBO_COHERENT_PHASE_FRAMES=1` publishes snapshots only after complete 3-phase updates for both
     `Ac/ActiveIn` and `Ac/Out`, reducing mixed-time phase combinations.
+  - `CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER=1` enables signed `instantaneous_values` rewrites on slave `100` for the active-power words only. In that mode `active_power_total` is written signed and `active_power_l1/l2/l3` are a signed equal split of the same total.
   - Optional virtual PV meter emulation for Maxem slave `001` is available via:
     - `CERBO_ENABLE_PV_SLAVE=1`
     - `CERBO_PV_TARGET_SLAVE=1`
     - `CERBO_PV_TOPICS=<comma-separated topic list>`
-    The PV total is summed from those topics and written to the `instantaneous_values` active-power words on slave `001`.
-    Phase power/current words for slave `001` are synthesized coherently from that total (equal split by phase, amps from ABB phase voltage).
+    - `CERBO_PV_SIGN_NEGATIVE=1`
+    - `CERBO_SUBTRACT_PV_FROM_HOME_USAGE=0`
+    The default topic is `N/48e7da878d35/system/0/Dc/Pv/Power`.
+    The PV total is summed from configured topic(s) and written to the `instantaneous_values` active-power words on slave `001`.
+    Slave `001` is currently modeled as single-phase: `active_power_total` is written as PV watts with the sign controlled by `CERBO_PV_SIGN_NEGATIVE`, mirrored to `active_power_l1`, with `active_power_l2/l3=0`.
+    `CERBO_PV_SIGN_NEGATIVE` controls whether slave `001` emits PV power as negative (`1`) or positive (`0`).
+    When `CERBO_SUBTRACT_PV_FROM_HOME_USAGE=1`, PV watts are subtracted from slave `100` home/grid rewrite watts before unsigned encoding (floored at `0`).
+    For this test model, non-instantaneous blocks on slave `001` are not mirrored from slave `100`.
   This keeps Maxem home/grid power semantics aligned with grid import/export while preserving AC-out current safety inputs
   used for EV phase protection.
 - The dry-run logger prints one semantic line before the preview values so it is obvious that the preview is the
@@ -100,7 +107,9 @@ your specific situation.
 - Cerbo MQTT poller is read-only and subscribes to:
   - `CERBO_AC_OUT_TOPIC` (default `N/48e7da878d35/vebus/276/Ac/Out`)
   - `CERBO_AC_ACTIVEIN_TOPIC` (default `N/48e7da878d35/vebus/276/Ac/ActiveIn`)
-  - `CERBO_PV_TOPICS` (default: three configured `solarcharger/.../Pv/.../P` topics; summed for virtual PV meter power)
+  - `CERBO_PV_TOPICS` (default: `N/48e7da878d35/system/0/Dc/Pv/Power`; summed for virtual PV meter power)
+  - `CERBO_PV_SIGN_NEGATIVE` (default: `1`; emit slave `001` PV watts as negative when set, positive when `0`)
+  - `CERBO_SUBTRACT_PV_FROM_HOME_USAGE` (current test path: `0`; set to `1` only when you want PV offset applied to slave `100`)
 - At `DEBUG` level the runtime logs snapshot updates from MQTT and preview lines (`ABB source` / `Cerbo ... to Maxem`).
 - To keep DEBUG readable by default:
   - `CERBO_MQTT_PROTOCOL_DEBUG=0` suppresses raw paho wire logs (`Sending CONNECT`, `Received PUBLISH`, etc).

@@ -19,7 +19,6 @@ from lib.maxem_home_usage import (
     CerboMqttPoller,
     INSTANTANEOUS_VALUES_REGISTER_NAME,
     describe_instantaneous_preview_basis,
-    split_total_watts_evenly,
     derive_phase_watts_from_currents,
     format_instantaneous_diff_lines,
     format_instantaneous_preview_lines,
@@ -104,10 +103,13 @@ CERBO_AC_OUT_TOPIC = _get_setting("CERBO_AC_OUT_TOPIC", "N/48e7da878d35/vebus/27
 CERBO_AC_ACTIVEIN_TOPIC = _get_setting("CERBO_AC_ACTIVEIN_TOPIC", "N/48e7da878d35/vebus/276/Ac/ActiveIn")
 CERBO_PV_TOPICS = _parse_csv_setting(
     "CERBO_PV_TOPICS",
-    "N/48e7da878d35/solarcharger/283/Pv/0/P,N/48e7da878d35/solarcharger/282/Pv/0/P,N/48e7da878d35/solarcharger/282/Pv/1/P",
+    "N/48e7da878d35/system/0/Dc/Pv/Power",
 )
 CERBO_ENABLE_PV_SLAVE = _parse_bool_setting("CERBO_ENABLE_PV_SLAVE", "1")
 CERBO_PV_TARGET_SLAVE = max(int(_get_setting("CERBO_PV_TARGET_SLAVE", "1")), 1)
+CERBO_PV_SIGN_NEGATIVE = _parse_bool_setting("CERBO_PV_SIGN_NEGATIVE", "1")
+CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER = _parse_bool_setting("CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER", "0")
+CERBO_SUBTRACT_PV_FROM_HOME_USAGE = _parse_bool_setting("CERBO_SUBTRACT_PV_FROM_HOME_USAGE", "1")
 CERBO_PHASE_POWER_SOURCE = _normalize_phase_power_source(_get_setting("CERBO_PHASE_POWER_SOURCE", "activein"))
 CERBO_FORCE_NONNEGATIVE_PHASE_POWER = _parse_bool_setting("CERBO_FORCE_NONNEGATIVE_PHASE_POWER", "0")
 CERBO_COHERENT_PHASE_FRAMES = _parse_bool_setting("CERBO_COHERENT_PHASE_FRAMES", "1")
@@ -209,6 +211,7 @@ def _log_source_effective_config() -> None:
         (
             "Cerbo MQTT source: host=%s(%s) port=%s(%s) ac_out_topic=%s(%s) ac_activein_topic=%s(%s) "
             "pv_topics=%s(%s) pv_slave_enabled=%s(%s) pv_target_slave=%s(%s) "
+            "pv_sign_negative=%s(%s) signed_instantaneous_power=%s(%s) subtract_pv_from_home_usage=%s(%s) "
             "phase_power_source=%s(%s) clamp_negative_phase_power=%s(%s) "
             "coherent_phase_frames=%s(%s) coherent_phase_frame_max_skew_seconds=%.2f(%s) "
             "protocol_debug=%s(%s) snapshot_debug_interval_seconds=%.2f(%s)"
@@ -227,6 +230,12 @@ def _log_source_effective_config() -> None:
         _get_setting_source("CERBO_ENABLE_PV_SLAVE"),
         CERBO_PV_TARGET_SLAVE,
         _get_setting_source("CERBO_PV_TARGET_SLAVE"),
+        int(CERBO_PV_SIGN_NEGATIVE),
+        _get_setting_source("CERBO_PV_SIGN_NEGATIVE"),
+        int(CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER),
+        _get_setting_source("CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER"),
+        int(CERBO_SUBTRACT_PV_FROM_HOME_USAGE),
+        _get_setting_source("CERBO_SUBTRACT_PV_FROM_HOME_USAGE"),
         CERBO_PHASE_POWER_SOURCE,
         _get_setting_source("CERBO_PHASE_POWER_SOURCE"),
         int(CERBO_FORCE_NONNEGATIVE_PHASE_POWER),
@@ -291,6 +300,14 @@ def _resolve_phase_usage_watts_for_rewrite(
 
 
 def _allow_negative_phase_power_for_rewrite() -> bool:
+    if CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER:
+        # Signed instantaneous mode intentionally allows negative phase words as
+        # part of the same split used for the total active-power rewrite.
+        return True
+    if CERBO_SUBTRACT_PV_FROM_HOME_USAGE:
+        # Keep only total power signed in home-PV offset mode.
+        # Phase power words are intentionally non-negative for Maxem stability.
+        return False
     if CERBO_FORCE_NONNEGATIVE_PHASE_POWER:
         return False
     return CERBO_PHASE_POWER_SOURCE == "activein"
@@ -298,18 +315,22 @@ def _allow_negative_phase_power_for_rewrite() -> bool:
 
 def _build_preview_snapshot_for_logging(
     usage_snapshot,
+    usage_watts,
     phase_usage_watts,
 ):
     if usage_snapshot is None:
         return None
-    if phase_usage_watts is None:
-        return usage_snapshot
     return CerboMqttSnapshot(
         sequence=getattr(usage_snapshot, "sequence", 0),
-        ac_in_phase_watts=tuple(float(value) for value in phase_usage_watts),
-        ac_in_total_watts=getattr(usage_snapshot, "rewrite_usage_watts", 0.0),
+        ac_in_phase_watts=(
+            tuple(float(value) for value in phase_usage_watts)
+            if phase_usage_watts is not None
+            else getattr(usage_snapshot, "phase_usage_watts", None)
+        ),
+        ac_in_total_watts=float(usage_watts) if usage_watts is not None else getattr(usage_snapshot, "rewrite_usage_watts", 0.0),
         ac_out_phase_currents=getattr(usage_snapshot, "phase_current_amps", None),
         ac_out_current_n=getattr(usage_snapshot, "current_n_amps", None),
+        pv_total_watts=getattr(usage_snapshot, "pv_total_watts", None),
     )
 
 
@@ -322,10 +343,70 @@ def _snapshot_pv_total_watts(usage_snapshot) -> float | None:
     return max(float(pv_total_watts), 0.0)
 
 
+def _split_total_watts_evenly_signed(total_watts: float) -> tuple[float, float, float]:
+    value = float(total_watts)
+    per_phase = value / 3.0
+    return (
+        per_phase,
+        per_phase,
+        value - (2.0 * per_phase),
+    )
+
+
+def _apply_pv_offset_to_home_usage(
+    *,
+    usage_watts: float,
+    phase_usage_watts: tuple[float, float, float] | None,
+    usage_snapshot,
+) -> tuple[float, tuple[float, float, float] | None]:
+    if not CERBO_SUBTRACT_PV_FROM_HOME_USAGE:
+        return float(usage_watts), phase_usage_watts
+
+    pv_total_watts = _snapshot_pv_total_watts(usage_snapshot)
+    if pv_total_watts is None or pv_total_watts <= 0.0:
+        return float(usage_watts), phase_usage_watts
+
+    # Offset PV generation from home/grid usage rewrite; signed result is intentional.
+    adjusted_usage_watts = float(usage_watts) - float(pv_total_watts)
+
+    # Keep total/phase power coherent by spreading signed remainder across L1/L2/L3.
+    adjusted_phase_usage_watts = _split_total_watts_evenly_signed(adjusted_usage_watts)
+    return adjusted_usage_watts, adjusted_phase_usage_watts
+
+
+def _clamp_unsigned_usage_for_rewrite(
+    *,
+    usage_watts: float,
+    phase_usage_watts: tuple[float, float, float] | None,
+) -> tuple[float, tuple[float, float, float] | None]:
+    clamped_usage_watts = max(float(usage_watts), 0.0)
+    if phase_usage_watts is None:
+        return clamped_usage_watts, None
+    return clamped_usage_watts, tuple(max(float(value), 0.0) for value in phase_usage_watts)
+
+
+def _prepare_home_instantaneous_power_for_rewrite(
+    *,
+    usage_watts: float,
+    phase_usage_watts: tuple[float, float, float] | None,
+) -> tuple[float, tuple[float, float, float] | None, bool, bool]:
+    if CERBO_ALLOW_SIGNED_INSTANTANEOUS_POWER:
+        signed_usage_watts = float(usage_watts)
+        signed_phase_usage_watts = _split_total_watts_evenly_signed(signed_usage_watts)
+        return signed_usage_watts, signed_phase_usage_watts, True, True
+
+    clamped_usage_watts, clamped_phase_usage_watts = _clamp_unsigned_usage_for_rewrite(
+        usage_watts=usage_watts,
+        phase_usage_watts=phase_usage_watts,
+    )
+    return clamped_usage_watts, clamped_phase_usage_watts, False, False
+
+
 def _pv_preview_signature(
     capture: RegisterCapture,
     *,
     pv_total_watts: float | None,
+    pv_negative: bool,
 ) -> tuple[object, ...]:
     return (
         capture.target_slave,
@@ -335,6 +416,7 @@ def _pv_preview_signature(
         capture.address_length,
         capture.source_values,
         pv_total_watts,
+        pv_negative,
     )
 
 
@@ -342,16 +424,18 @@ def _format_pv_preview_lines(
     *,
     pv_target_slave: int,
     pv_total_watts: float | None,
+    pv_negative: bool,
 ) -> list[str]:
     if pv_total_watts is None:
         return [f"Cerbo PV to Maxem (slave {pv_target_slave:03d}): awaiting baseline"]
 
-    phase_watts = split_total_watts_evenly(pv_total_watts)
+    pv_raw_watts = max(float(pv_total_watts), 0.0)
+    pv_signed_total_watts = -pv_raw_watts if pv_negative else pv_raw_watts
     return [
-        f"Cerbo PV to Maxem (slave {pv_target_slave:03d}): {pv_total_watts:,.2f} W",
+        f"Cerbo PV to Maxem (slave {pv_target_slave:03d}): {pv_signed_total_watts:,.2f} W",
         (
             f"Cerbo PV Phase Watts to Maxem (slave {pv_target_slave:03d}): "
-            f"L1={phase_watts[0]:,.2f} W, L2={phase_watts[1]:,.2f} W, L3={phase_watts[2]:,.2f} W"
+            f"L1={pv_signed_total_watts:,.2f} W, L2=0.00 W, L3=0.00 W"
         ),
     ]
 
@@ -409,6 +493,11 @@ def main():
         if CERBO_ENABLE_PV_SLAVE and not pv_slave_enabled_runtime:
             logger.warning(
                 "PV virtual meter disabled because CERBO_PV_TARGET_SLAVE=%s collides with existing slave addresses.",
+                CERBO_PV_TARGET_SLAVE,
+            )
+        elif pv_slave_enabled_runtime:
+            logger.info(
+                "PV virtual meter slave %03d enabled: only instantaneous_values are synthesized; non-instantaneous blocks are not mirrored from slave 100.",
                 CERBO_PV_TARGET_SLAVE,
             )
 
@@ -495,10 +584,25 @@ def main():
                                 source_values=acload_values,
                                 usage_snapshot=preview_snapshot,
                             )
+                            usage_watts, phase_usage_watts = _apply_pv_offset_to_home_usage(
+                                usage_watts=float(usage_watts),
+                                phase_usage_watts=phase_usage_watts,
+                                usage_snapshot=preview_snapshot,
+                            )
+                            (
+                                usage_watts,
+                                phase_usage_watts,
+                                allow_negative,
+                                allow_negative_phase,
+                            ) = _prepare_home_instantaneous_power_for_rewrite(
+                                usage_watts=usage_watts,
+                                phase_usage_watts=phase_usage_watts,
+                            )
                             phase_current_amps = preview_snapshot.phase_current_amps if preview_snapshot else None
                             current_n_amps = preview_snapshot.current_n_amps if preview_snapshot else None
                             preview_display_snapshot = _build_preview_snapshot_for_logging(
                                 preview_snapshot,
+                                usage_watts,
                                 phase_usage_watts,
                             )
                             rewritten_values = rewrite_instantaneous_values(
@@ -507,8 +611,8 @@ def main():
                                 phase_usage_watts=phase_usage_watts,
                                 phase_current_amps=phase_current_amps,
                                 current_n_amps=current_n_amps,
-                                allow_negative=True,
-                                allow_negative_phase=_allow_negative_phase_power_for_rewrite(),
+                                allow_negative=allow_negative,
+                                allow_negative_phase=allow_negative_phase,
                             )
                             preview_signature_value = preview_signature(
                                 capture,
@@ -539,10 +643,12 @@ def main():
                                 pv_rewritten_values = rewrite_pv_instantaneous_values(
                                     acload_values,
                                     pv_total_watts=pv_total_watts,
+                                    pv_negative=CERBO_PV_SIGN_NEGATIVE,
                                 )
                                 pv_preview_signature_value = _pv_preview_signature(
                                     pv_capture,
                                     pv_total_watts=pv_total_watts,
+                                    pv_negative=CERBO_PV_SIGN_NEGATIVE,
                                 )
                                 pv_preview_signature_key = (
                                     pv_capture.target_slave,
@@ -553,6 +659,7 @@ def main():
                                     for preview_line in _format_pv_preview_lines(
                                         pv_target_slave=CERBO_PV_TARGET_SLAVE,
                                         pv_total_watts=pv_total_watts,
+                                        pv_negative=CERBO_PV_SIGN_NEGATIVE,
                                     ):
                                         logger.debug(preview_line)
                                     if trace_instantaneous_payload:
@@ -582,10 +689,25 @@ def main():
                                     source_values=acload_values,
                                     usage_snapshot=usage_snapshot,
                                 )
+                                usage_watts, phase_usage_watts = _apply_pv_offset_to_home_usage(
+                                    usage_watts=float(usage_watts),
+                                    phase_usage_watts=phase_usage_watts,
+                                    usage_snapshot=usage_snapshot,
+                                )
+                                (
+                                    usage_watts,
+                                    phase_usage_watts,
+                                    allow_negative,
+                                    allow_negative_phase,
+                                ) = _prepare_home_instantaneous_power_for_rewrite(
+                                    usage_watts=usage_watts,
+                                    phase_usage_watts=phase_usage_watts,
+                                )
                                 phase_current_amps = usage_snapshot.phase_current_amps if usage_snapshot else None
                                 current_n_amps = usage_snapshot.current_n_amps if usage_snapshot else None
                                 live_preview_snapshot = _build_preview_snapshot_for_logging(
                                     usage_snapshot,
+                                    usage_watts,
                                     phase_usage_watts,
                                 )
                                 rewritten_values = rewrite_instantaneous_values(
@@ -594,8 +716,8 @@ def main():
                                     phase_usage_watts=phase_usage_watts,
                                     phase_current_amps=phase_current_amps,
                                     current_n_amps=current_n_amps,
-                                    allow_negative=True,
-                                    allow_negative_phase=_allow_negative_phase_power_for_rewrite(),
+                                    allow_negative=allow_negative,
+                                    allow_negative_phase=allow_negative_phase,
                                 )
                                 live_preview_signature = preview_signature(
                                     capture,
@@ -627,10 +749,12 @@ def main():
                                     pv_rewritten_values = rewrite_pv_instantaneous_values(
                                         acload_values,
                                         pv_total_watts=pv_total_watts,
+                                        pv_negative=CERBO_PV_SIGN_NEGATIVE,
                                     )
                                     pv_preview_signature_value = _pv_preview_signature(
                                         pv_capture,
                                         pv_total_watts=pv_total_watts,
+                                        pv_negative=CERBO_PV_SIGN_NEGATIVE,
                                     )
                                     pv_preview_signature_key = (
                                         pv_capture.target_slave,
@@ -641,6 +765,7 @@ def main():
                                         for preview_line in _format_pv_preview_lines(
                                             pv_target_slave=CERBO_PV_TARGET_SLAVE,
                                             pv_total_watts=pv_total_watts,
+                                            pv_negative=CERBO_PV_SIGN_NEGATIVE,
                                         ):
                                             logger.debug(preview_line)
                                         if trace_instantaneous_payload:
@@ -653,8 +778,6 @@ def main():
                                     maxem_pv.set_values(register_name, addr, pv_rewritten_values)
                             else:
                                 maxem_100.set_values(register_name, addr, acload_values)
-                                if maxem_pv is not None:
-                                    maxem_pv.set_values(register_name, addr, acload_values)
                     if dry_run_maxem_home:
                         continue
 
